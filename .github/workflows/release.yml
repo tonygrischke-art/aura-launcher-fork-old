@@ -37,12 +37,20 @@ jobs:
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
         run: |
-          [ -n "$KEYSTORE_B64" ] || { echo "Set the KEYSTORE_B64 secret first"; exit 1; }
-          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
           v="${GITHUB_REF_NAME#v}"; IFS=. read -r a b c <<< "$v"
-          KEYSTORE="$RUNNER_TEMP/release.keystore" VERSION_NAME="$v" \
-            VERSION_CODE=$(( a * 10000 + b * 100 + ${c:-0} )) android/build.sh
-          rm -f "$RUNNER_TEMP/release.keystore"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            KEYSTORE="$RUNNER_TEMP/release.keystore" VERSION_NAME="$v" \
+              VERSION_CODE=$(( a * 10000 + b * 100 + ${c:-0} )) android/build.sh
+            rm -f "$RUNNER_TEMP/release.keystore"
+          else
+            # Fork: no KEYSTORE_B64 secret set — build.sh generates a run-local (debug-grade) key.
+            # Caveat: each such release is signed with a different key; pm install -r over a
+            # differently-signed install will fail (uninstall first).
+            echo "KEYSTORE_B64 not set; signing with an auto-generated run-local key" >&2
+            VERSION_NAME="$v" \
+              VERSION_CODE=$(( a * 10000 + b * 100 + ${c:-0} )) android/build.sh
+          fi
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
