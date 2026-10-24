@@ -1820,6 +1820,19 @@ public class MainActivity extends Activity {
             return true;
         }
 
+        /** Fork (launcher home): open the system's app list (Settings → Apps). */
+        @JavascriptInterface
+        public void openAppDrawer(String key) {
+            if (!ok(key)) return;
+            runOnUiThread(() -> {
+                try {
+                    startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                } catch (Exception ignored) {
+                }
+            });
+        }
+
         @JavascriptInterface
         public void speak(String key, String text, String cfg) {
             if (!ok(key)) return;

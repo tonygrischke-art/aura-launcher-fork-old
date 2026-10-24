@@ -24,6 +24,7 @@ interface AndroidBridge {
   openTtsEngineApp?(pkg: string): void
   isAssistant?(): boolean // Hermes holds the phone's assistant role
   isLauncher?(): boolean // fork: the Android shell wants the reduced launcher home (one command field + response area)
+  openAppDrawer?(): void // fork: the system's app list (Settings → Apps)
   openAssistantSettings?(): void // system page to pick the digital assistant app
   stopSpeaking?(): void
   ttsControl?(cmd: 'play' | 'pause' | 'toggle' | 'rew' | 'ff' | 'stop'): void // read-aloud, shared with its notification
@@ -143,6 +144,11 @@ export function appInBackground(): boolean {
 export function openExternal(url: string): void {
   if (native) native.openExternal(url)
   else window.open(url, '_blank', 'noopener')
+}
+
+/** Fork (launcher home): the system's app list. No browser equivalent. */
+export function openAppDrawer(): void {
+  native?.openAppDrawer?.()
 }
 
 let imageSeq = 0

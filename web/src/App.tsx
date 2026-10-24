@@ -32,6 +32,7 @@ import { BgApp } from './components/BgApp'
 import { AutoButton } from './components/AutoAccess'
 import { refreshBg } from './bgapp'
 import { bootMark } from './boot'
+import { openAppDrawer } from './bridge'
 import { UninstallResume } from './components/Uninstall'
 
 declare global {
@@ -591,7 +592,7 @@ function Chat({ onPick }: { onPick: (t: string) => void }) {
  */
 const LAUNCHER = window.HermesAndroid?.isLauncher?.() === true
 
-function LauncherHome() {
+function LauncherHome({ onOpenFull }: { onOpenFull: () => void }) {
   const conn = useStore(s => s.conn)
   const connDetail = useStore(s => s.connDetail)
   const items = useStore(s => s.active?.items ?? null)
@@ -682,6 +683,12 @@ function LauncherHome() {
           }}
           aria-label="Command"
         />
+        <button className="send" aria-label="Apps" onClick={() => openAppDrawer()}>
+          Apps
+        </button>
+        <button className="send" aria-label="Full interface" onClick={onOpenFull}>
+          ⋯
+        </button>
         <button className="send" aria-label="Send" onClick={() => void send()} disabled={!text.trim() || busy}>
           →
         </button>
@@ -708,6 +715,8 @@ export function App() {
   const scale = useStore(s => s.textScale)
   const [injected, setInjected] = useState<string | null>(null)
   const clearInjected = useCallback(() => setInjected(null), [])
+  // Fork: inside the Android shell, the ⋯ button leaves the launcher home for the full interface.
+  const [launcherFull, setLauncherFull] = useState(false)
 
   useEffect(() => {
     bootMark('painted')
@@ -736,7 +745,7 @@ export function App() {
   }, [scale])
 
   // Fork: inside the Android shell the home screen is the launcher (one command field + response area).
-  if (LAUNCHER) return <LauncherHome />
+  if (LAUNCHER && !launcherFull) return <LauncherHome onOpenFull={() => setLauncherFull(true)} />
 
   return (
     <div className="app">
@@ -788,6 +797,11 @@ export function App() {
           </div>
         ))}
       </div>
+      {LAUNCHER && (
+        <button className="launcher-exit" aria-label="Back to the launcher home" onClick={() => setLauncherFull(false)}>
+          ⌂
+        </button>
+      )}
     </div>
   )
 }

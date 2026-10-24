@@ -3280,3 +3280,4 @@ button.set-row:active, .set-row[role='presentation']:active { background: var(--
 .app.launcher .launcher-field input:focus { border-color: var(--accent); }
 .app.launcher .launcher-field .send { width: auto; min-width: 44px; padding: 0 12px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; }
 .app.launcher .launcher-field .send:disabled { opacity: 0.5; }
+.launcher-exit { position: fixed; left: 12px; bottom: calc(96px + env(safe-area-inset-bottom)); z-index: 60; width: 40px; height: 40px; border-radius: 50%; background: var(--surface); color: var(--dim); border: 1px solid var(--border); font-size: 18px; opacity: 0.85; }
