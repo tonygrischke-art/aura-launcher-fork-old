@@ -52,8 +52,8 @@ javac -encoding UTF-8 -source 11 -target 11 -Xlint:-options -classpath "$ANDROID
 ( cd build/dex && zip -q -j ../unsigned.apk classes.dex )
 
 # 4. align + sign
-[ -f "$KS" ] || keytool -genkeypair -keystore "$KS" -storepass hermesmobile -keypass hermesmobile \
-  -alias hermes -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Hermes Mobile, O=omarqaterge" >/dev/null 2>&1
+[ -f "$KS" ] || { mkdir -p "$(dirname "$KS")"; keytool -genkeypair -keystore "$KS" -storepass hermesmobile -keypass hermesmobile \
+  -alias hermes -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Hermes Mobile, O=omarqaterge" >/dev/null 2>&1; }
 "$BT/zipalign" -f -p 4 build/unsigned.apk build/aligned.apk
 "$BT/apksigner" sign --ks "$KS" --ks-pass pass:hermesmobile --key-pass pass:hermesmobile \
   --out build/hermes-mobile.apk build/aligned.apk
