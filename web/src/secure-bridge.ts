@@ -12,6 +12,7 @@ const METHODS = [
   'getToken', 'httpAsync', 'openFile', 'getBaseUrl', 'startHermes', 'notify', 'setBackground', 'isSystemDark',
   'cancelNotification', 'openExternal', 'copyText', 'copyRich', 'haptic', 'isInForeground', 'appVersion',
   'sharedItem', 'mediaBase', 'setLastChat', 'getTokenAsync', 'setupState', 'setupFix', 'isAssistant', 'openAssistantSettings', 'signInTermux', 'installUpdate',
+  'isLauncher',
   'saveImage', 'shareImage', 'chatSeen', 'setUnseen', 'installHelperApp', 'probeTermux', 'setupCommand', 'setupProgress',
   'bgState', 'bgFrameAsync', 'bgAction',
   'uninstallStart', 'uninstallState', 'uninstallApp'

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { compressChat, connect, errText, fmtCtx, newSession, openSessionFromNotification, reconnectNow } from './gateway'
+import { compressChat, connect, errText, fmtCtx, newSession, openSessionFromNotification, queueMessage, reconnectNow, sendPrompt } from './gateway'
 import { closeScreen, getState, setState, toast, useStore, type ChatItem, type Todo } from './store'
 import { ItemView, ToolRunHead } from './components/ChatItems'
 import { foldMap } from './fold'
@@ -583,6 +583,122 @@ function Chat({ onPick }: { onPick: (t: string) => void }) {
   )
 }
 
+/**
+ * Launcher home (this fork): inside the Android shell MainActivity.Bridge.isLauncher() is true, and the
+ * home screen reduces to one command field + response area. The full UI still builds for the browser and
+ * the e2e suite, which run without the native bridge. Sends go through the same gateway path (sendPrompt),
+ * and approval requests still surface via RequestSheet.
+ */
+const LAUNCHER = window.HermesAndroid?.isLauncher?.() === true
+
+function LauncherHome() {
+  const conn = useStore(s => s.conn)
+  const connDetail = useStore(s => s.connDetail)
+  const items = useStore(s => s.active?.items ?? null)
+  const running = useStore(s => s.active?.running ?? false)
+  const status = useStore(s => s.active?.status ?? '')
+  const request = useStore(s => s.requests[0])
+  const toasts = useStore(s => s.toasts)
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  // The latest turn of the active session: the command that was asked and Hermes's reply (streaming included).
+  let reply: ChatItem | null = null
+  let asked: ChatItem | null = null
+  if (items)
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i]
+      if (it.kind === 'assistant' && it.text.trim()) {
+        reply = it
+        break
+      }
+      if (it.kind === 'user' && !asked) asked = it
+    }
+
+  const send = async () => {
+    const t = text
+    if (!t.trim() || busy) return
+    if (conn !== 'open') {
+      // Offline: keep it and send it on reconnect (same as the full UI's composer).
+      const prev = getState().queued?.text
+      queueMessage(prev ? `${prev}\n\n${t.trim()}` : t.trim())
+      setText('')
+      return
+    }
+    setBusy(true)
+    setText('')
+    try {
+      await sendPrompt(t)
+    } catch (err) {
+      setText(t)
+      toast(errText(err), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="app launcher">
+      {conn !== 'open' && (
+        <div className="conn-banner">
+          <Spinner small />
+          <span className="conn-label">
+            {connDetail || (conn === 'connecting' ? 'Connecting to Hermes…' : 'Hermes is offline')}
+          </span>
+          <button className="mini" onClick={() => reconnectNow()}>
+            {conn === 'connecting' ? 'Retry' : 'Restart Hermes'}
+          </button>
+        </div>
+      )}
+      <div className="launcher-response">
+        {reply ? (
+          <>
+            {asked && <div className="launcher-asked dim">{asked.text}</div>}
+            <ItemView item={reply} actions={false} busy={running} />
+            {running && (
+              <div className="statusbar">
+                <div className="status-line">
+                  <Spinner small /> <span className="status-text">{status || 'Working…'}</span>
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="empty">
+            <div className="logo">☤</div>
+            <div className="empty-title">Aura</div>
+            <div className="dim">{running ? status || 'Working…' : 'Type a command.'}</div>
+          </div>
+        )}
+      </div>
+      <div className="launcher-field">
+        <input
+          autoFocus
+          value={text}
+          placeholder={conn !== 'open' ? 'Offline: it sends when Hermes is back' : running ? 'Steer the running task…' : 'Command'}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') void send()
+          }}
+          aria-label="Command"
+        />
+        <button className="send" aria-label="Send" onClick={() => void send()} disabled={!text.trim() || busy}>
+          →
+        </button>
+      </div>
+      {request && <RequestSheet key={request.id} req={request} />}
+      <DialogHost />
+      <div className="toasts">
+        {toasts.map(t => (
+          <div key={t.id} className={`toast toast-${t.level}`}>
+            {t.text}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function App() {
   const sheet = useStore(s => s.sheet)
   const screen = useStore(s => s.screen)
@@ -618,6 +734,9 @@ export function App() {
   useEffect(() => {
     document.documentElement.style.setProperty('--scale', String(scale))
   }, [scale])
+
+  // Fork: inside the Android shell the home screen is the launcher (one command field + response area).
+  if (LAUNCHER) return <LauncherHome />
 
   return (
     <div className="app">

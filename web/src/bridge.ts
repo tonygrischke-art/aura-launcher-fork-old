@@ -23,6 +23,7 @@ interface AndroidBridge {
   listVoices?(cfg: string): void
   openTtsEngineApp?(pkg: string): void
   isAssistant?(): boolean // Hermes holds the phone's assistant role
+  isLauncher?(): boolean // fork: the Android shell wants the reduced launcher home (one command field + response area)
   openAssistantSettings?(): void // system page to pick the digital assistant app
   stopSpeaking?(): void
   ttsControl?(cmd: 'play' | 'pause' | 'toggle' | 'rew' | 'ff' | 'stop'): void // read-aloud, shared with its notification

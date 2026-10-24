@@ -3270,3 +3270,13 @@ button.set-row:active, .set-row[role='presentation']:active { background: var(--
 .provider-key { display: flex; gap: 8px; align-items: center; padding: 10px 12px; }
 .provider-key input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; outline: none; color: inherit; font: inherit; }
 .providers .set-value { white-space: nowrap; font-size: 0.78rem; }
+
+/* ── Launcher home (fork): one command field + response area ─────────────────────────────── */
+.app.launcher { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+.app.launcher .launcher-response { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; }
+.app.launcher .launcher-asked { padding: 0 2px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app.launcher .launcher-field { display: flex; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); }
+.app.launcher .launcher-field input { flex: 1; min-width: 0; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; font-size: 16px; outline: none; }
+.app.launcher .launcher-field input:focus { border-color: var(--accent); }
+.app.launcher .launcher-field .send { width: auto; min-width: 44px; padding: 0 12px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); font-size: 13px; }
+.app.launcher .launcher-field .send:disabled { opacity: 0.5; }

@@ -1811,6 +1811,15 @@ public class MainActivity extends Activity {
             return bridgeKey;
         }
 
+        /** Fork: launcher mode flag for the page. A constant, so no key check — but the secure-bridge
+         *  wrapper passes the key as the first argument to every method, so accept and ignore it.
+         *  True renders the reduced launcher home: one command field + response area. The full UI stays
+         *  for the browser and the e2e suite, which run without this bridge. */
+        @JavascriptInterface
+        public boolean isLauncher(String key) {
+            return true;
+        }
+
         @JavascriptInterface
         public void speak(String key, String text, String cfg) {
             if (!ok(key)) return;
