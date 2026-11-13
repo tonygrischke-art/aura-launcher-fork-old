@@ -14,8 +14,16 @@ object UserProfileStore {
     private const val KEY_USER_BIO = "user_bio"
 
     fun getUserName(context: Context): String {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_USER_NAME, null) ?: ""
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val newKey = prefs.getString(KEY_USER_NAME, null)
+        if (newKey != null) return newKey
+        // One-time migration from legacy 'user_profile' key
+        val legacy = prefs.getString("user_profile", null)
+        if (legacy != null && legacy.isNotBlank()) {
+            prefs.edit().putString(KEY_USER_NAME, legacy).remove("user_profile").apply()
+            return legacy
+        }
+        return ""
     }
 
     fun setUserName(context: Context, name: String) {

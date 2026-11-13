@@ -11,10 +11,13 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
-/**
- * Sealed class representing the possible route outcomes from CommandRouter.
- * Defined at top-level for proper exhaustiveness checking.
- */
+/** Screen control verbs that should route to ScreenAgent (shizuku) */
+private val SCREEN_CONTROL_VERBS = setOf(
+    "tap", "swipe", "type", "input", "key", "press", "longpress", "long-press",
+    "screenshot", "screen", "read", "dump", "uiautomator", "uidump", "scroll"
+)
+
+/** Sealed class representing the possible route outcomes from CommandRouter. */
 sealed class AuraActionRoute {
     data class OpenApp(val target: String) : AuraActionRoute()
     data class CallContact(val name: String) : AuraActionRoute()
@@ -23,6 +26,8 @@ sealed class AuraActionRoute {
     data class NavigateWeb(val url: String) : AuraActionRoute()
     data class AskHermes(val input: String) : AuraActionRoute()
     data class ShizukuShell(val command: String) : AuraActionRoute()
+    /** Screen control action that routes to ScreenAgent (requires Shizuku READY). */
+    data class ScreenControl(val command: String) : AuraActionRoute()
 }
 
 /**
@@ -181,6 +186,11 @@ object CommandRouter {
             else AuraActionRoute.ShizukuShell(command)
         }
 
+        // Screen control verbs -> route to ScreenControl (will be handled by ScreenAgent)
+        if (firstWord in SCREEN_CONTROL_VERBS) {
+            return AuraActionRoute.ScreenControl(trimmed)
+        }
+
         return when {
             firstWord in OPEN_VERBS -> {
                 val rest = words.drop(1).joinToString(" ")
@@ -190,8 +200,6 @@ object CommandRouter {
                     val appTarget = parts.firstOrNull()?.trim() ?: ""
                     val urlTarget = parts.drop(1).firstOrNull()?.trim() ?: ""
                     if (appTarget.isNotBlank() && urlTarget.isNotBlank()) {
-                        // For now, return NavigateWeb with combined info
-                        // ActionExecutor will handle opening app + navigating
                         return AuraActionRoute.NavigateWeb("$appTarget|$urlTarget")
                     }
                 }
@@ -245,54 +253,4 @@ object CommandRouter {
             else -> AuraActionRoute.AskHermes(input)
         }
     }
-}
-
-/** Broadcast receiver to refresh AppIndex on package changes. */
-class PackageChangeReceiver : android.content.BroadcastReceiver() {
-    private var appIndex: AppIndex? = null
-
-    fun setAppIndex(index: AppIndex) {
-        appIndex = index
-    }
-
-    override fun onReceive(context: Context?, intent: android.content.Intent?) {
-        if (intent?.action == Intent.ACTION_PACKAGE_ADDED ||
-            intent?.action == Intent.ACTION_PACKAGE_REMOVED ||
-            intent?.action == Intent.ACTION_PACKAGE_REPLACED) {
-            appIndex?.build()
-            Log.d("AuraRouter", "AppIndex refreshed due to ${intent.action}")
-        }
-    }
-}
-
-/** Helper to initialize AppIndex and register receiver. */
-object AppIndexManager {
-    @Volatile private var instance: AppIndex? = null
-    private var receiver: PackageChangeReceiver? = null
-
-    fun init(context: Context): AppIndex {
-        if (instance == null) {
-            synchronized(this) {
-                if (instance == null) {
-                    val idx = AppIndex(context.applicationContext)
-                    instance = idx
-                    // Build on background
-                    CoroutineScope(Dispatchers.IO).launch { idx.build() }
-                    // Register receiver
-                    val rcv = PackageChangeReceiver().apply { setAppIndex(idx) }
-                    receiver = rcv
-                    val filter = android.content.IntentFilter().apply {
-                        addAction(Intent.ACTION_PACKAGE_ADDED)
-                        addAction(Intent.ACTION_PACKAGE_REMOVED)
-                        addAction(Intent.ACTION_PACKAGE_REPLACED)
-                        addDataScheme("package")
-                    }
-                    context.applicationContext.registerReceiver(rcv, filter, Context.RECEIVER_EXPORTED)
-                }
-            }
-        }
-        return instance!!
-    }
-
-    fun get(): AppIndex? = instance
 }

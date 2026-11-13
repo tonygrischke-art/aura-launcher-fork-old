@@ -25,6 +25,7 @@ import com.aetheria.aura.nim.NimClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.collectAsStateWithLifecycle
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
@@ -35,13 +36,13 @@ import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.await
 import com.aetheria.aura.model.TestModelFileManager
 import com.aetheria.aura.net.HermesClient
 import com.aetheria.aura.actions.ActionExecutor
 import com.aetheria.aura.router.AppIndex
 import com.aetheria.aura.router.CommandRouter
 import com.aetheria.aura.router.AuraActionRoute
-import com.aetheria.aura.router.AppIndexManager
 import com.aetheria.aura.settings.SettingsScreen
 import com.aetheria.aura.wakeWord.WakeWordService
 import androidx.activity.ComponentActivity
@@ -50,6 +51,9 @@ import com.aetheria.aura.actions.AuraAction
 import com.aetheria.aura.accessibility.AuraAccessibilityService
 import com.aetheria.aura.shizuku.ShellExecutor
 import com.aetheria.aura.shizuku.ShizukuManager
+import com.aetheria.aura.db.ChatRepository
+import com.aetheria.aura.db.Conversation
+import com.aetheria.aura.db.Message
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -66,6 +70,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.*
@@ -103,6 +108,8 @@ class MainActivity : ComponentActivity() {
     private var speechRecognizer: SpeechRecognizer? = null
     private var isListening = false
     private lateinit var nimClient: NimClient
+    private lateinit var chatRepository: ChatRepository
+    private var currentConversation: Conversation? = null
     private var currentPhase: AuraMood = AuraMood.IDLE
     private var micLevel = mutableFloatStateOf(0f)
     private val wakeWordReceiver = object : BroadcastReceiver() {
@@ -118,23 +125,20 @@ class MainActivity : ComponentActivity() {
     private val prefsName = "aura_prefs"
     private val prefsFirstRunKey = "first_run_complete"
     private val prefsAccessibilityEnabledKey = "accessibility_enabled"
-    
+
     // Permission request launchers
     private val requestPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         // Permission result handled by onboarding UI
     }
-    
+
     private val requestMultiplePermissionsLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
         // Handled by onboarding UI
     }
 
-    // Single source of truth for messages - mutableStateOf accessible from anywhere
-    private val messagesState = androidx.compose.runtime.mutableStateOf<java.util.ArrayList<ChatMessage>>(ArrayList())
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Initialize AppIndex with auto-refresh on package changes
-        AppIndexManager.init(this)
+        // Initialize ChatRepository
+        chatRepository = ChatRepository(this)
 
         // Ensure model files are available in app private storage
         lifecycleScope.launch(Dispatchers.IO) {
@@ -166,12 +170,21 @@ class MainActivity : ComponentActivity() {
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
 
+        // Load or create conversation, recover pending messages
+        lifecycleScope.launch(Dispatchers.IO) {
+            chatRepository.recoverAllPendingMessages()
+            currentConversation = chatRepository.getOrCreateDefaultConversation()
+            Log.d(TAG, "Loaded conversation: ${currentConversation?.id} ${currentConversation?.title}")
+        }
+
         setContent {
             val pm = packageManager
-            val appIndex = AppIndexManager.get() ?: AppIndex(this)
+            val appIndex = AppIndex(this)
             // Build AppIndex on background thread
             lifecycleScope.launch(Dispatchers.IO) {
-                val (count, buildTimeMs) = appIndex.build()
+                val result = appIndex.build()
+                val count = result.first
+                val buildTimeMs = result.second
                 Log.d("AuraRouter", "AppIndex built: $count apps in ${buildTimeMs}ms")
             }
 
@@ -180,92 +193,105 @@ class MainActivity : ComponentActivity() {
             val firstRunComplete = prefs.getBoolean(prefsFirstRunKey, false)
             
             AuraTheme {
-                var input by remember { mutableStateOf("") }
-                var focused by remember { mutableStateOf(false) }
-                var phase by remember { mutableStateOf(currentPhase) }
-                var status by remember { mutableStateOf<String?>(null) }
-                val messages = messagesState
-                var showSettings by remember { mutableStateOf(false) }
-                val scope = rememberCoroutineScope()
-                
-                // Onboarding state
-                var showOnboarding by remember { mutableStateOf(!firstRunComplete) }
-                
-                fun addMessage(role: ChatMessage.Role, content: String) {
-                    val msg = ChatMessage(role = role, content = content)
-                    messages.value.add(msg)
-                }
+                            var input by remember { mutableStateOf("") }
+                            var focused by remember { mutableStateOf(false) }
+                            var phase by remember { mutableStateOf(currentPhase) }
+                            var status by remember { mutableStateOf<String?>(null) }
+                            var showSettings by remember { mutableStateOf(false) }
+                            val scope = rememberCoroutineScope()
 
-                fun submit() {
-                    val cmd = input.trim(); if (cmd.isEmpty()) return
-                    input = ""; status = null
-                    doSubmit(cmd)
-                }
+                            // Onboarding state
+                            var showOnboarding by remember { mutableStateOf(!firstRunComplete) }
 
-                fun startListening() {
-                    if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                        startSpeechRecognition()
-                    } else {
-                        requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    }
-                }
-                fun stopListening() {
-                    speechRecognizer?.stopListening()
-                    isListening = false
-                }
+                            // Observe messages from database
+                            val conversationId = currentConversation?.id ?: -1L
+                            val messagesFlow = if (conversationId > 0) chatRepository.getMessages(conversationId) else kotlinx.coroutines.flow.emptyFlow()
+                            val messages by messagesFlow.collectAsStateWithLifecycle(initialValue = emptyList())
 
-                val shown = if (phase != AuraMood.IDLE) phase else if (focused) AuraMood.LISTENING else AuraMood.IDLE
+                            fun submit() {
+                                val cmd = input.trim(); if (cmd.isEmpty()) return
+                                input = ""; status = null
+                                doSubmit(cmd)
+                            }
 
-                // Show onboarding overlay if needed
-                if (showOnboarding) {
-                    PermissionOnboardingScreen(
-                        onComplete = { 
-                            showOnboarding = false
-                            getSharedPreferences(prefsName, MODE_PRIVATE)
-                                .edit()
-                                .putBoolean(prefsFirstRunKey, true)
-                                .apply()
-                        },
-                        onSkip = {
-                            showOnboarding = false
-                            getSharedPreferences(prefsName, MODE_PRIVATE)
-                                .edit()
-                                .putBoolean(prefsFirstRunKey, true)
-                                .apply()
-                        },
-                        requestPermissionLauncher = requestPermissionLauncher,
-                        requestMultiplePermissionsLauncher = requestMultiplePermissionsLauncher
-                    )
-                } else if (showSettings) {
-                    SettingsScreen(onClose = { showSettings = false })
-                } else {
-                    AuraHomeScreen(
-                        mood = shown,
-                        input = input,
-                        onInputChange = { input = it },
-                        onSubmit = { submit() },
-                        onFocusChange = { focused = it },
-                        onMic = {
-                            if (isListening) stopListening() else startListening()
-                        },
-                        status = status,
-                        messages = messages.value as List<ChatMessage>,
-                        onSettings = { showSettings = true },
-                        micLevel = micLevel.floatValue
-                    )
-                }
-            }
+                            fun startListening() {
+                                if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                                    startSpeechRecognition()
+                                } else {
+                                    requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                            }
+                            fun stopListening() {
+                                speechRecognizer?.stopListening()
+                                isListening = false
+                            }
+
+                            val shown = if (phase != AuraMood.IDLE) phase else if (focused) AuraMood.LISTENING else AuraMood.IDLE
+
+                            // Show onboarding overlay if needed
+                            if (showOnboarding) {
+                                PermissionOnboardingScreen(
+                                    onComplete = {
+                                        showOnboarding = false
+                                        getSharedPreferences(prefsName, MODE_PRIVATE)
+                                            .edit()
+                                            .putBoolean(prefsFirstRunKey, true)
+                                            .apply()
+                                    },
+                                    onSkip = {
+                                        showOnboarding = false
+                                        getSharedPreferences(prefsName, MODE_PRIVATE)
+                                            .edit()
+                                            .putBoolean(prefsFirstRunKey, true)
+                                            .apply()
+                                    },
+                                    requestPermissionLauncher = requestPermissionLauncher,
+                                    requestMultiplePermissionsLauncher = requestMultiplePermissionsLauncher
+                                )
+                            } else if (showSettings) {
+                                SettingsScreen(
+                                    onClose = { showSettings = false },
+                                    chatRepository = chatRepository,
+                                    currentConversation = currentConversation,
+                                    onClearConversation = { conv ->
+                                        lifecycleScope.launch(Dispatchers.IO) {
+                                            chatRepository.clearConversation(conv.id)
+                                        }
+                                    }
+                                )
+                            } else {
+                                AuraHomeScreen(
+                                    mood = shown,
+                                    input = input,
+                                    onInputChange = { input = it },
+                                    onSubmit = { submit() },
+                                    onFocusChange = { focused = it },
+                                    onMic = {
+                                        if (isListening) stopListening() else startListening()
+                                    },
+                                    status = status,
+                                    messages = messages,
+                                    onSettings = { showSettings = true },
+                                    micLevel = micLevel.floatValue
+                                )
+                            }
+                        }
         }
     }
 
     fun doSubmit(cmd: String) {
         val trimmed = cmd.trim()
         if (trimmed.isEmpty()) return
-        
-        addMessageInternal(ChatMessage.Role.USER, trimmed)
+
+        // Add user message to database
+        val conv = currentConversation ?: return
+        lifecycleScope.launch(Dispatchers.IO) {
+            chatRepository.addUserMessage(conv.id, trimmed)
+        }
         Log.d("AuraRouter", "submit cmd='$trimmed'")
-        
+
         // Run on background thread
+        val activityContext = this@MainActivity
         val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
         scope.launch {
             currentPhase = AuraMood.THINKING
@@ -276,16 +302,19 @@ class MainActivity : ComponentActivity() {
                 Log.d("AuraRouter", "route=$route")
                 val startMs = System.currentTimeMillis()
                 // Exhaustive when on sealed class AuraActionRoute
-                val activity = this@MainActivity
+                val activity = activityContext
                 val context = activity
                 val pkgMgr = activity.packageManager
-                val appIdx = AppIndexManager.get() ?: AppIndex(activity)
+                val appIdx = AppIndex(activity)
                 when (route) {
                     is AuraActionRoute.OpenApp -> {
                         val action = AuraAction.OpenApp(route.target)
                         val result = ActionExecutor.execute(action, context, pkgMgr, appIdx)
                         Log.d("AuraRouter", "Routed OPEN_APP target='${route.target}' action=$result matchTimeMs=${System.currentTimeMillis() - startMs}")
-                        if (result == "error") addMessageInternal(ChatMessage.Role.SYSTEM, "Could not find app: ${route.target}")
+                        if (result == "error") {
+                            val c = currentConversation ?: return@launch
+                            lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, "Could not find app: ${route.target}") }
+                        }
                     }
                     is AuraActionRoute.CallContact -> {
                         val action = AuraAction.CallContact(route.name)
@@ -308,150 +337,128 @@ class MainActivity : ComponentActivity() {
                         Log.d("AuraRouter", "Routed NAVIGATE_WEB url='${route.url}' action=$result matchTimeMs=${System.currentTimeMillis() - startMs}")
                     }
                     is AuraActionRoute.AskHermes -> {
-                                            Log.d("AuraRouter", "Routed ASK_HERMES input='${route.input}' matchTimeMs=${System.currentTimeMillis() - startMs}")
-                                            
-                                            // Check model source preference
-                                            val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
-                                            val modelSource = ModelSource.valueOf(
-                                                prefs.getString("model_source", ModelSource.ONLINE.name) ?: ModelSource.ONLINE.name
-                                            )
-                                            
-                                            // OFFLINE or BOTH: run the on-device model first; BOTH falls back to NIM on failure.
-                                            if (modelSource == ModelSource.OFFLINE || modelSource == ModelSource.BOTH) {
-                                                val localId = System.nanoTime()
-                                                val history = messagesState.value
-                                                    .filter { it.role != ChatMessage.Role.SYSTEM && it.content.isNotBlank() }
-                                                    .map { (if (it.role == ChatMessage.Role.USER) "user" else "assistant") to it.content }
-                                                runOnUiThread {
-                                                    messagesState.value = ArrayList(messagesState.value).apply {
-                                                        add(ChatMessage(id = localId, role = ChatMessage.Role.AURA, content = ""))
-                                                    }
-                                                }
-                                                val sb = StringBuilder()
-                                                val localStart = System.currentTimeMillis()
-                                                val localErr = com.aetheria.aura.llm.LocalLlm.chat(activity.applicationContext, history, 512) { piece ->
-                                                    sb.append(piece)
-                                                    val text = sb.toString()
-                                                    runOnUiThread { setMessageContent(localId, text) }
-                                                }
-                                                Log.d("AuraRouter", "local inference done err=$localErr chars=${sb.length} ms=${System.currentTimeMillis() - localStart}")
-                                                if (localErr == null) return@launch
-                                                runOnUiThread { removeMessage(localId) }
-                                                if (modelSource == ModelSource.OFFLINE) {
-                                                    addMessageInternal(ChatMessage.Role.SYSTEM, "Local model failed: $localErr")
-                                                    return@launch
-                                                }
-                                                addMessageInternal(ChatMessage.Role.SYSTEM, "Local model unavailable ($localErr); using NIM...")
-                                            }
+                        Log.d("AuraRouter", "Routed ASK_HERMES input='${route.input}' matchTimeMs=${System.currentTimeMillis() - startMs}")
 
-                                            // Use NIM (online) for now
-                                            val startTime = System.currentTimeMillis()
-                                            var firstToken = false
-                                            var tokenCount = 0
-                                            val messageId = System.currentTimeMillis()
+                        // Check model source preference
+                        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+                        val modelSource = ModelSource.valueOf(
+                            prefs.getString("model_source", ModelSource.ONLINE.name) ?: ModelSource.ONLINE.name
+                        )
 
-                                            // Add placeholder message for streaming
-                                            val placeholderMsg = ChatMessage(id = messageId, role = ChatMessage.Role.AURA, content = "")
-                                            runOnUiThread { addMessageInternal(ChatMessage.Role.AURA, "") }
+                        // OFFLINE or BOTH: run the on-device model first; BOTH falls back to NIM on failure.
+                        if (modelSource == ModelSource.OFFLINE || modelSource == ModelSource.BOTH) {
+                            val c = currentConversation ?: return@launch
+                            val localMsg = lifecycleScope.launch(Dispatchers.IO) { chatRepository.addPendingAssistantMessage(c.id) }.await()
+                            val localId = localMsg.id
+                            if (localId < 0) return@launch
+                            val history = chatRepository.buildHistoryForLlm(c.id)
+                            val sb = StringBuilder()
+                            val localStart = System.currentTimeMillis()
+                            val localErr = com.aetheria.aura.llm.LocalLlm.chat(activity.applicationContext, history, 512) { piece ->
+                                sb.append(piece)
+                                val text = sb.toString()
+                                runOnUiThread { lifecycleScope.launch(Dispatchers.IO) { chatRepository.updateAssistantMessage(localId, text) } }
+                            }
+                            Log.d("AuraRouter", "local inference done err=$localErr chars=${sb.length} ms=${System.currentTimeMillis() - localStart}")
+                            if (localErr == null) {
+                                lifecycleScope.launch(Dispatchers.IO) { chatRepository.completeAssistantMessage(localId, sb.toString()) }
+                                return@launch
+                            }
+                            lifecycleScope.launch(Dispatchers.IO) { chatRepository.failAssistantMessage(localId, "Local model failed: $localErr") }
+                            if (modelSource == ModelSource.OFFLINE) {
+                                lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, "Local model failed: $localErr") }
+                                return@launch
+                            }
+                            lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, "Local model unavailable ($localErr); using NIM...") }
+                        }
 
-                                            // Convert local messages to NimClient messages
-                                            val nimMessages = messagesState.value.map { NimChatMessage(it.role.name.lowercase(), it.content) }.toList()
+                        // Use NIM (online) for now
+                        val startTime = System.currentTimeMillis()
+                        var firstToken = false
+                        var tokenCount = 0
+                        val c = currentConversation ?: return@launch
+                        val msg = lifecycleScope.launch(Dispatchers.IO) { chatRepository.addPendingAssistantMessage(c.id) }.await()
+                        val messageId = msg.id
+                        if (messageId < 0) return@launch
 
-                                            // Determine tier: VISION for image-related, THINKING for complex, INSTANT for quick
-                                            val tier = when {
-                                                route.input.contains("image") || route.input.contains("photo") || route.input.contains("picture") || route.input.contains("camera") || route.input.contains("screenshot") -> com.aetheria.aura.nim.NimClient.Tier.VISION
-                                                route.input.length > 200 -> com.aetheria.aura.nim.NimClient.Tier.THINKING
-                                                else -> com.aetheria.aura.nim.NimClient.Tier.INSTANT
-                                            }
+                        // Convert local messages to NimClient messages
+                        val nimMessages = chatRepository.getNimMessages(c.id)
 
-                                            nimClient.streamChat(
-                                                messages = nimMessages,
-                                                tier = tier,
-                                                onToken = { token ->
-                                                    if (!firstToken) {
-                                                        val ttfb = System.currentTimeMillis() - startTime
-                                                        Log.d("AuraRouter", "TTFB: ${ttfb}ms")
-                                                        firstToken = true
-                                                    }
-                                                    tokenCount++
-                                                    // Update the streaming message
-                                                    runOnUiThread {
-                                                        val idx = messagesState.value.indexOfFirst { it.id == messageId }
-                                                        if (idx >= 0) {
-                                                            val current = messagesState.value[idx]
-                                                            messagesState.value[idx] = current.copy(content = current.content + token)
-                                                        }
-                                                    }
-                                                },
-                                                onComplete = { success ->
-                                                    val totalTime = System.currentTimeMillis() - startTime
-                                                    runOnUiThread {
-                                                        val finalIdx = messagesState.value.indexOfFirst { it.id == messageId }
-                                                        if (finalIdx >= 0) {
-                                                            val current = messagesState.value[finalIdx]
-                                                            if (current.content.isEmpty()) {
-                                                                messagesState.value[finalIdx] = current.copy(content = "(no response)")
-                                                            }
-                                                        }
-                                                    }
-                                                    Log.d("AuraRouter", "NimClient stream complete: success=$success tokens=$tokenCount totalTime=${totalTime}ms tier=$tier")
-                                                    if (!success) {
-                                                        runOnUiThread {
-                                                            val errIdx = messagesState.value.indexOfFirst { it.id == messageId }
-                                                            if (errIdx >= 0) {
-                                                                messagesState.value[errIdx] = messagesState.value[errIdx].copy(content = "NIM unreachable (stream failed)")
-                                                            }
-                                                        }
-                                                    }
-                                                },
-                                                onError = { error ->
-                                                    Log.e("AuraRouter", "NimClient error: $error")
-                                                    runOnUiThread {
-                                                        val errorIdx = messagesState.value.indexOfFirst { it.id == messageId }
-                                                        if (errorIdx >= 0) {
-                                                            messagesState.value[errorIdx] = messagesState.value[errorIdx].copy(content = "NIM unreachable ($error)")
-                                                        }
-                                                    }
-                                                }
-                                            )
-                                        }
+                        // Determine tier: VISION for image-related, THINKING for complex, INSTANT for quick
+                        val tier = when {
+                            route.input.contains("image") || route.input.contains("photo") || route.input.contains("picture") || route.input.contains("camera") || route.input.contains("screenshot") -> com.aetheria.aura.nim.NimClient.Tier.VISION
+                            route.input.length > 200 -> com.aetheria.aura.nim.NimClient.Tier.THINKING
+                            else -> com.aetheria.aura.nim.NimClient.Tier.INSTANT
+                        }
+
+                        nimClient.streamChat(
+                            messages = nimMessages,
+                            tier = tier,
+                            onToken = { token ->
+                                if (!firstToken) {
+                                    val ttfb = System.currentTimeMillis() - startTime
+                                    Log.d("AuraRouter", "TTFB: ${ttfb}ms")
+                                    firstToken = true
+                                }
+                                tokenCount++
+                                // Update the streaming message
+                                runOnUiThread { lifecycleScope.launch(Dispatchers.IO) { chatRepository.updateAssistantMessage(messageId, "") } }
+                            },
+                            onComplete = { success ->
+                                val totalTime = System.currentTimeMillis() - startTime
+                                runOnUiThread {
+                                    // Message content is already updated via onToken
+                                }
+                                Log.d("AuraRouter", "NimClient stream complete: success=$success tokens=$tokenCount totalTime=${totalTime}ms tier=$tier")
+                                if (!success) {
+                                    runOnUiThread { lifecycleScope.launch(Dispatchers.IO) { chatRepository.failAssistantMessage(messageId, "NIM unreachable (stream failed)") } }
+                                } else {
+                                    runOnUiThread { lifecycleScope.launch(Dispatchers.IO) { chatRepository.completeAssistantMessage(messageId, "") } } // Content already updated
+                                }
+                            },
+                            onError = { error ->
+                                Log.e("AuraRouter", "NimClient error: $error")
+                                runOnUiThread { lifecycleScope.launch(Dispatchers.IO) { chatRepository.failAssistantMessage(messageId, "NIM unreachable ($error)") } }
+                            }
+                        )
+                    }
                     is AuraActionRoute.ShizukuShell -> {
                         // Raw shell command via the Shizuku user service (uid 2000 shell).
                         val shizukuResult = ShellExecutor.exec(route.command)
                         Log.d("AuraRouter", "Routed SHIZUKU_SHELL cmd='${route.command}' exit=${shizukuResult.exitCode}")
-                        addMessageInternal(ChatMessage.Role.SYSTEM, buildString {
+                        val c = currentConversation ?: return@launch
+                        lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, buildString {
                             append("shizuku: ${route.command}")
                             append("\nexit=${shizukuResult.exitCode}")
                             if (shizukuResult.stdout.isNotBlank()) append("\nstdout:\n${shizukuResult.stdout.take(4000)}")
                             if (shizukuResult.stderr.isNotBlank()) append("\nstderr:\n${shizukuResult.stderr.take(4000)}")
-                        })
+                        }) }
+                    }
+                    is AuraActionRoute.ScreenControl -> {
+                        // Screen control via ScreenAgent (local LLM + Shizuku shell).
+                        if (ShizukuManager.state.value != ShizukuManager.State.READY) {
+                            val c = currentConversation ?: return@launch
+                            lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id,
+                                "Screen control needs Shizuku: ${ShizukuManager.state.value}. " +
+                                "Start Shizuku app, grant permission, then retry."
+                            ) }
+                        } else {
+                            val result = com.aetheria.aura.shizuku.ScreenAgent.runTask(activityContext, route.command) { step ->
+                                Log.d("ScreenAgent", "step: $step")
+                            }
+                            val c = currentConversation ?: return@launch
+                            lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, result) }
+                        }
                     }
                 }
             } catch (e: Exception) {
                 Log.e("AuraRouter", "submit failed cmd='$trimmed'", e)
-                runOnUiThread { addMessageInternal(ChatMessage.Role.SYSTEM, "Error: ${e.message}") }
+                val c = currentConversation ?: return@launch
+                runOnUiThread { lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, "Error: ${e.message}") } }
             } finally {
                 currentPhase = AuraMood.IDLE
                 runOnUiThread { currentPhase = AuraMood.IDLE }
             }
-        }
-    }
-
-    // Replace-the-list updates so Compose sees a new value (in-place ArrayList mutation does not notify).
-    private fun setMessageContent(id: Long, content: String) {
-        val list = ArrayList(messagesState.value)
-        val i = list.indexOfFirst { it.id == id }
-        if (i >= 0) { list[i] = list[i].copy(content = content); messagesState.value = list }
-    }
-
-    private fun removeMessage(id: Long) {
-        messagesState.value = ArrayList(messagesState.value.filter { it.id != id })
-    }
-
-    private fun addMessageInternal(role: ChatMessage.Role, content: String) {
-        runOnUiThread {
-            val msg = ChatMessage(role = role, content = content)
-            messagesState.value.add(msg)
         }
     }
 
@@ -863,7 +870,10 @@ fun PermissionRow(
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 fun SettingsScreen(
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    chatRepository: ChatRepository,
+    currentConversation: Conversation?,
+    onClearConversation: (Conversation) -> Unit
 ) {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("aura_prefs", android.content.Context.MODE_PRIVATE)
@@ -1243,6 +1253,43 @@ fun SettingsScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.1f), contentColor = Color.White)
                     ) {
                         Text("Get Shizuku")
+                    }
+                }
+
+                Divider(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 16.dp),
+                    color = Color.White.copy(alpha = 0.2f),
+                    thickness = 1.dp
+                )
+
+                // Clear Conversation
+                if (currentConversation != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Clear Conversation",
+                                style = Typography().bodyMedium,
+                                color = Color.White
+                            )
+                            Text(
+                                text = "Delete all messages in current chat",
+                                style = Typography().bodySmall,
+                                color = Color.White.copy(alpha = 0.6f)
+                            )
+                        }
+
+                        Button(
+                            onClick = { onClearConversation(currentConversation) },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4D1A), contentColor = Color.White)
+                        ) {
+                            Text("Clear", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }

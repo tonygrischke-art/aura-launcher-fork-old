@@ -40,7 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
-import com.aetheria.aura.ChatMessage
+import com.aetheria.aura.db.Message
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -60,7 +60,7 @@ fun AuraHomeScreen(
     onMic: () -> Unit,
     onSettings: () -> Unit,
     status: String?,
-    messages: List<ChatMessage>,
+    messages: List<Message>,
     modifier: Modifier = Modifier,
     micLevel: Float = 0f,
 ) {
@@ -93,7 +93,7 @@ fun AuraHomeScreen(
                 Text(clock, color = Color.White, fontSize = 64.sp, fontWeight = FontWeight.Thin)
                 Text(date, color = Color.White.copy(alpha = 0.6f), fontSize = 16.sp)
             }
-            
+
             // Settings button
             androidx.compose.material3.IconButton(
                 onClick = onSettings,
@@ -163,9 +163,9 @@ fun AuraHomeScreen(
                 state = scrollState,
             ) {
                 items(messages) { msg ->
-                    val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(msg.timestamp)
+                    val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(msg.timestamp))
                     when (msg.role) {
-                        ChatMessage.Role.USER -> {
+                        Message.ROLE_USER -> {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -182,7 +182,7 @@ fun AuraHomeScreen(
                                         horizontalAlignment = Alignment.End
                                     ) {
                                         Text(
-                                            text = msg.content,
+                                            text = msg.text,
                                             color = Color.White,
                                             fontSize = 14.sp,
                                             maxLines = 10
@@ -197,7 +197,7 @@ fun AuraHomeScreen(
                                 }
                             }
                         }
-                        ChatMessage.Role.AURA -> {
+                        Message.ROLE_ASSISTANT -> {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -214,7 +214,7 @@ fun AuraHomeScreen(
                                         horizontalAlignment = Alignment.Start
                                     ) {
                                         Text(
-                                            text = msg.content,
+                                            text = msg.text,
                                             color = Color.Cyan,
                                             fontSize = 14.sp,
                                             maxLines = 10
@@ -229,13 +229,13 @@ fun AuraHomeScreen(
                                 }
                             }
                         }
-                        ChatMessage.Role.SYSTEM -> {
+                        Message.ROLE_SYSTEM -> {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.Center
                             ) {
                                 Text(
-                                    text = msg.content,
+                                    text = msg.text,
                                     color = Color.Gray,
                                     fontSize = 13.sp,
                                     maxLines = 5

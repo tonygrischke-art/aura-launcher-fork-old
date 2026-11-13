@@ -1,10 +1,11 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-   id("com.android.application")
-   id("org.jetbrains.kotlin.android")
-   id("kotlin-android")
-   id("org.jetbrains.kotlin.plugin.compose")
+  id("com.android.application")
+  id("org.jetbrains.kotlin.android")
+  id("kotlin-android")
+  id("org.jetbrains.kotlin.plugin.compose")
+  id("com.google.devtools.ksp")
 }
 
 val composeBomVersion: String by project
@@ -13,6 +14,7 @@ val lifecycleVersion: String by project
 val coreKtxVersion: String by project
 val coroutinesVersion: String by project
 val shizukuVersion: String by project
+val roomVersion: String by project
 
 android {
     namespace = "com.aetheria.aura"
@@ -130,6 +132,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:$lifecycleVersion")
     implementation("androidx.core:core-ktx:$coreKtxVersion")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutinesVersion")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutinesVersion")
 
     // Shizuku (API v13.1.5): shell-uid command execution via user service + ready-check provider
     implementation("dev.rikka.shizuku:api:$shizukuVersion")
@@ -148,6 +151,11 @@ dependencies {
 
     // WorkManager for daily health checks
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+
+    // Room (KSP)
+    implementation("androidx.room:room-runtime:$roomVersion")
+    implementation("androidx.room:room-ktx:$roomVersion")
+    ksp("androidx.room:room-compiler:$roomVersion")
 
     // Media3 ExoPlayer for video orb
     implementation("androidx.media3:media3-exoplayer:1.5.1")
