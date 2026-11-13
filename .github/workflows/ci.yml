@@ -118,20 +118,19 @@ jobs:
       - name: Install web dependencies
         run: npm ci
         working-directory: web
-      - name: Build APK with native library
+      - name: Build APK with native library via Gradle
         run: |
-          cd android
-          chmod +x build.sh
-          ./build.sh
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hermes-mobile-apk
-          path: android/build/hermes-mobile.apk
+          name: aura-launcher-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
       - name: Upload native libraries
         uses: actions/upload-artifact@v4
         with:
-          name: hermes-mobile-native-libs
-          path: android/src/main/jniLibs/arm64-v8a/*.so
+          name: aura-launcher-native-libs
+          path: app/build/intermediates/cxx/Debug/*/obj/arm64-v8a/*.so
           retention-days: 7
