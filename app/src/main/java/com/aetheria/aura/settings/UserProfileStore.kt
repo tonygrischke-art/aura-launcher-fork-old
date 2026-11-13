@@ -12,6 +12,7 @@ object UserProfileStore {
     private const val PREFS_NAME = "aura_settings"
     private const val KEY_USER_NAME = "user_name"
     private const val KEY_USER_BIO = "user_bio"
+    private const val KEY_CONVERSATION_ID = "conversation_id"
 
     fun getUserName(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -42,6 +43,18 @@ object UserProfileStore {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_USER_BIO, bio)
+            .apply()
+    }
+
+    fun getConversationId(context: Context): Long {
+        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getLong(KEY_CONVERSATION_ID, -1L)
+    }
+
+    fun setConversationId(context: Context, conversationId: Long) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(KEY_CONVERSATION_ID, conversationId)
             .apply()
     }
 

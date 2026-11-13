@@ -38,6 +38,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import com.aetheria.aura.model.TestModelFileManager
 import com.aetheria.aura.net.HermesClient
 import com.aetheria.aura.actions.ActionExecutor
@@ -54,8 +59,10 @@ import com.aetheria.aura.actions.AuraAction
 import com.aetheria.aura.accessibility.AuraAccessibilityService
 import com.aetheria.aura.shizuku.ShellExecutor
 import com.aetheria.aura.shizuku.ShizukuManager
+import com.aetheria.aura.db.AuraDatabase
 import com.aetheria.aura.db.ChatRepository
 import com.aetheria.aura.db.Conversation
+import com.aetheria.aura.db.ConversationDao
 import com.aetheria.aura.db.Message
 import java.io.File
 import java.text.SimpleDateFormat
@@ -112,6 +119,7 @@ class MainActivity : ComponentActivity() {
     private var isListening = false
     private lateinit var nimClient: NimClient
     private lateinit var chatRepository: ChatRepository
+    private lateinit var conversationDao: ConversationDao
     private var currentConversation: Conversation? = null
     private var currentPhase: AuraMood = AuraMood.IDLE
     private var micLevel = mutableFloatStateOf(0f)
@@ -142,6 +150,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Initialize ChatRepository
         chatRepository = ChatRepository(this)
+        conversationDao = AuraDatabase.getInstance(this).conversationDao()
 
         // Ensure model files are available in app private storage
         lifecycleScope.launch(Dispatchers.IO) {
@@ -176,7 +185,20 @@ class MainActivity : ComponentActivity() {
         // Load or create conversation, recover pending messages
         lifecycleScope.launch(Dispatchers.IO) {
             chatRepository.recoverAllPendingMessages()
-            currentConversation = chatRepository.getOrCreateDefaultConversation()
+            // Try to restore the last used conversation ID from preferences
+            val savedConversationId = UserProfileStore.getConversationId(this@MainActivity)
+            if (savedConversationId > 0) {
+                val savedConversation = conversationDao.getById(savedConversationId).first()
+                if (savedConversation != null) {
+                    currentConversation = savedConversation
+                } else {
+                    currentConversation = chatRepository.getOrCreateDefaultConversation()
+                }
+            } else {
+                currentConversation = chatRepository.getOrCreateDefaultConversation()
+            }
+            // Persist the conversation ID for next launch
+            currentConversation?.let { UserProfileStore.setConversationId(this@MainActivity, it.id) }
             Log.d(TAG, "Loaded conversation: ${currentConversation?.id} ${currentConversation?.title}")
         }
 
