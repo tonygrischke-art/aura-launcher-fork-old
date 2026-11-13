@@ -17,6 +17,13 @@ private val SCREEN_CONTROL_VERBS = setOf(
     "screenshot", "screen", "read", "dump", "uiautomator", "uidump", "scroll"
 )
 
+/** Identity-related queries that should short-circuit to local response */
+private val IDENTITY_QUERIES = setOf(
+    "who am i", "whoami",
+    "what's my name", "what is my name", "whats my name",
+    "where am i", "whereami"
+)
+
 /** Sealed class representing the possible route outcomes from CommandRouter. */
 sealed class AuraActionRoute {
     data class OpenApp(val target: String) : AuraActionRoute()
@@ -28,6 +35,8 @@ sealed class AuraActionRoute {
     data class ShizukuShell(val command: String) : AuraActionRoute()
     /** Screen control action that routes to ScreenAgent (requires Shizuku READY). */
     data class ScreenControl(val command: String) : AuraActionRoute()
+    /** Identity query that returns local user profile info. */
+    data class IdentityQuery(val queryType: String) : AuraActionRoute() // "name" or "location"
 }
 
 /**
@@ -175,6 +184,17 @@ object CommandRouter {
             else trimmed.substring("what is the weather".length).trim()
             return if (query.isBlank()) AuraActionRoute.WebSearch("the weather")
             else AuraActionRoute.WebSearch(query)
+        }
+
+        // Identity short-circuit: handle "who am i", "what's my name", "where am i" before any LLM call
+        if (lowerInput in IDENTITY_QUERIES) {
+            return when {
+                lowerInput in setOf("who am i", "whoami", "what's my name", "what is my name", "whats my name") ->
+                    AuraActionRoute.IdentityQuery("name")
+                lowerInput in setOf("where am i", "whereami") ->
+                    AuraActionRoute.IdentityQuery("location")
+                else -> AuraActionRoute.AskHermes(input)
+            }
         }
 
         if (firstWord.isBlank()) return AuraActionRoute.AskHermes(input)

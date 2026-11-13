@@ -2,6 +2,7 @@ package com.aetheria.aura.router
 
 import com.aetheria.aura.router.AuraActionRoute.AskHermes
 import com.aetheria.aura.router.AuraActionRoute.CallContact
+import com.aetheria.aura.router.AuraActionRoute.IdentityQuery
 import com.aetheria.aura.router.AuraActionRoute.OpenApp
 import com.aetheria.aura.router.AuraActionRoute.SendText
 import com.aetheria.aura.router.AuraActionRoute.WebSearch
@@ -289,5 +290,64 @@ class CommandRouterTest {
     fun `shizuku as a word without colon still routes to AskHermes`() {
         val route = route("shizuku please")
         assertTrue(route is AskHermes)
+    }
+
+    @Test
+    fun `who am i routes to IdentityQuery name`() {
+        val route = route("who am i")
+        assertTrue(route is IdentityQuery)
+        assertEquals("name", (route as IdentityQuery).queryType)
+    }
+
+    @Test
+    fun `whoami routes to IdentityQuery name`() {
+        val route = route("whoami")
+        assertTrue(route is IdentityQuery)
+        assertEquals("name", (route as IdentityQuery).queryType)
+    }
+
+    @Test
+    fun `what is my name routes to IdentityQuery name`() {
+        val route = route("what is my name")
+        assertTrue(route is IdentityQuery)
+        assertEquals("name", (route as IdentityQuery).queryType)
+    }
+
+    @Test
+    fun `whats my name routes to IdentityQuery name`() {
+        val route = route("whats my name")
+        assertTrue(route is IdentityQuery)
+        assertEquals("name", (route as IdentityQuery).queryType)
+    }
+
+    @Test
+    fun `what's my name routes to IdentityQuery name`() {
+        val route = route("what's my name")
+        assertTrue(route is IdentityQuery)
+        assertEquals("name", (route as IdentityQuery).queryType)
+    }
+
+    @Test
+    fun `where am i routes to IdentityQuery location`() {
+        val route = route("where am i")
+        assertTrue(route is IdentityQuery)
+        assertEquals("location", (route as IdentityQuery).queryType)
+    }
+
+    @Test
+    fun `whereami routes to IdentityQuery location`() {
+        val route = route("whereami")
+        assertTrue(route is IdentityQuery)
+        assertEquals("location", (route as IdentityQuery).queryType)
+    }
+
+    @Test
+    fun `case insensitive identity queries`() {
+        val route1 = route("WHO AM I")
+        val route2 = route("What Is My Name")
+        val route3 = route("WHERE AM I")
+        assertTrue(route1 is IdentityQuery)
+        assertTrue(route2 is IdentityQuery)
+        assertTrue(route3 is IdentityQuery)
     }
 }
