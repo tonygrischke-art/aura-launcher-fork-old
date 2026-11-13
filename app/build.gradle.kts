@@ -2,10 +2,11 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
   id("com.android.application")
-  id("org.jetbrains.kotlin.android")
+  id("org.jetbrains.kotlin.android") version "2.0.21"
   id("kotlin-android")
-  id("org.jetbrains.kotlin.plugin.compose")
-  id("com.google.devtools.ksp")
+  id("org.jetbrains.kotlin.plugin.compose") version "2.0.21"
+  id("org.jetbrains.kotlin.plugin.serialization") version "2.0.21"
+  id("com.google.devtools.ksp") version "2.0.21-1.0.28"
 }
 
 val composeBomVersion: String by project
@@ -145,6 +146,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp-sse:4.12.0")
     implementation("com.google.code.gson:gson:2.10.1")
 
+    // kotlinx.serialization for JSON parsing
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+
     // Material Icons
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.material:material-icons-extended")
@@ -156,6 +160,7 @@ dependencies {
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
     ksp("androidx.room:room-compiler:$roomVersion")
+    testImplementation("androidx.room:room-testing:$roomVersion")
 
     // Media3 ExoPlayer for video orb
     implementation("androidx.media3:media3-exoplayer:1.5.1")
@@ -172,6 +177,9 @@ dependencies {
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:1.9.20")
     testImplementation("org.jetbrains.kotlin:kotlin-test:1.9.20")
     testImplementation("org.json:json:20231013")
+    testImplementation("androidx.test:core:1.5.0")
+    testImplementation("androidx.test:rules:1.5.0")
+    testImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")

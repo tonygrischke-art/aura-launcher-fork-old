@@ -23,6 +23,15 @@ sealed class AuraAction {
     /** Action to navigate to a web URL (open browser + navigate) */
     data class NavigateWeb(val url: String) : AuraAction()
 
+    /** Action to take a screenshot via Shizuku */
+    data class TakeScreenshot(val dummy: String = "") : AuraAction()
+
+    /** Action to type text via screen control */
+    data class TypeText(val text: String) : AuraAction()
+
+    /** Action to tap at coordinates via screen control */
+    data class Tap(val x: Int, val y: Int) : AuraAction()
+
     /** Action to ask Hermes (catch-all for non-phone actions) */
     data class AskHermes(val input: String) : AuraAction()
 
@@ -61,6 +70,16 @@ sealed class AuraAction {
                     "navigate_web" -> {
                         val url = args?.getString("url") ?: ""
                         AuraAction.NavigateWeb(url)
+                    }
+                    "take_screenshot" -> AuraAction.TakeScreenshot()
+                    "type_text" -> {
+                        val text = args?.getString("text") ?: ""
+                        AuraAction.TypeText(text)
+                    }
+                    "tap" -> {
+                        val x = args?.getInt("x") ?: 0
+                        val y = args?.getInt("y") ?: 0
+                        AuraAction.Tap(x, y)
                     }
                     "ask_hermes" -> {
                         val input = args?.getString("input") ?: ""

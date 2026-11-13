@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.util.Log
+import com.aetheria.aura.brain.SkillMatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -37,6 +38,8 @@ sealed class AuraActionRoute {
     data class ScreenControl(val command: String) : AuraActionRoute()
     /** Identity query that returns local user profile info. */
     data class IdentityQuery(val queryType: String) : AuraActionRoute() // "name" or "location"
+    /** Local LLM query (on-device model) - fallback for unmatched text before AskHermes. */
+    data class LocalLlm(val input: String) : AuraActionRoute()
 }
 
 /**
@@ -166,6 +169,9 @@ object CommandRouter {
     // Navigation verbs for web URLs
     private val NAVIGATE_VERBS = setOf("go to", "navigate to", "visit", "browse to", "open url", "load")
 
+    // SkillMatcher instance for seeded skills (runs before any LLM call)
+    private val skillMatcher = SkillMatcher()
+
     /**
      * Route a raw user command to an action route.
      * Pure function - no side effects.
@@ -194,6 +200,49 @@ object CommandRouter {
                 lowerInput in setOf("where am i", "whereami") ->
                     AuraActionRoute.IdentityQuery("location")
                 else -> AuraActionRoute.AskHermes(input)
+            }
+        }
+
+        // Check SkillMatcher for seeded skills BEFORE falling back to verb-based routing
+        // SkillMatcher handles: static responses (battery, time, date, wifi) and action skills
+        val skillResult = skillMatcher.match(trimmed)
+        if (skillResult != null) {
+            return when (skillResult) {
+                is SkillMatcher.SkillResult.Static -> {
+                    // For static responses, return AskHermes with the static response as input
+                    // The caller will handle this as a local response
+                    AuraActionRoute.AskHermes(skillResult.response)
+                }
+                is SkillMatcher.SkillResult.RequiresLlm -> {
+                    // Convert skill action type to AuraActionRoute
+                    when (skillResult.actionType) {
+                        "OPEN_APP" -> {
+                            // Extract target from query after the verb
+                            val target = extractTargetAfterVerb(trimmed, listOf("open ", "launch ", "start "))
+                            if (target.isBlank()) AuraActionRoute.AskHermes(input)
+                            else AuraActionRoute.OpenApp(target)
+                        }
+                        "CALL_CONTACT" -> {
+                            val name = extractTargetAfterVerb(trimmed, listOf("call ", "dial ", "phone "))
+                            if (name.isBlank()) AuraActionRoute.AskHermes(input)
+                            else AuraActionRoute.CallContact(name)
+                        }
+                        "SEND_TEXT" -> {
+                            // For text skills, we need to extract name and body
+                            val (name, body) = extractTextParams(trimmed)
+                            if (name.isBlank()) AuraActionRoute.AskHermes(input)
+                            else AuraActionRoute.SendText(name, body)
+                        }
+                        "WEB_SEARCH" -> {
+                            val query = extractTargetAfterVerb(trimmed, listOf("search ", "google ", "look up ", "lookup ", "find "))
+                            AuraActionRoute.WebSearch(query)
+                        }
+                        "TAKE_SCREENSHOT" -> AuraActionRoute.ScreenControl("screenshot")
+                        "TYPE_TEXT" -> AuraActionRoute.ScreenControl(trimmed)
+                        "TAP" -> AuraActionRoute.ScreenControl(trimmed)
+                        else -> AuraActionRoute.AskHermes(input)
+                    }
+                }
             }
         }
 
@@ -270,7 +319,29 @@ object CommandRouter {
                 if (url.isBlank()) AuraActionRoute.AskHermes(input)
                 else AuraActionRoute.NavigateWeb(url)
             }
-            else -> AuraActionRoute.AskHermes(input)
+            else -> AuraActionRoute.LocalLlm(input)
         }
+    }
+
+    /** Extract the target text after any of the given verb prefixes. */
+    private fun extractTargetAfterVerb(input: String, verbs: List<String>): String {
+        val lower = input.lowercase()
+        for (verb in verbs) {
+            if (lower.startsWith(verb)) {
+                return input.substring(verb.length).trim()
+            }
+        }
+        return ""
+    }
+
+    /** Extract name and body for text/send commands. */
+    private fun extractTextParams(input: String): Pair<String, String> {
+        val words = input.trim().split("\\s+".toRegex())
+        if (words.size < 2) return Pair("", "")
+        // Skip first verb word, first remaining is name, rest is body
+        val rest = words.drop(1)
+        val name = rest.firstOrNull() ?: ""
+        val body = rest.drop(1).joinToString(" ")
+        return Pair(name, body)
     }
 }

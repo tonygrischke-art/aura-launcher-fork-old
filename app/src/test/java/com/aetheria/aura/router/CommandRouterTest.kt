@@ -3,7 +3,9 @@ package com.aetheria.aura.router
 import com.aetheria.aura.router.AuraActionRoute.AskHermes
 import com.aetheria.aura.router.AuraActionRoute.CallContact
 import com.aetheria.aura.router.AuraActionRoute.IdentityQuery
+import com.aetheria.aura.router.AuraActionRoute.LocalLlm
 import com.aetheria.aura.router.AuraActionRoute.OpenApp
+import com.aetheria.aura.router.AuraActionRoute.ScreenControl
 import com.aetheria.aura.router.AuraActionRoute.SendText
 import com.aetheria.aura.router.AuraActionRoute.WebSearch
 import com.aetheria.aura.router.AuraActionRoute.ShizukuShell
@@ -58,17 +60,17 @@ class CommandRouterTest {
     }
 
     @Test
-    fun `hello routes to AskHermes`() {
+    fun `hello routes to LocalLlm`() {
         val route = route("hello")
-        assertTrue(route is AskHermes)
-        assertEquals("hello", (route as AskHermes).input)
+        assertTrue(route is LocalLlm)
+        assertEquals("hello", (route as LocalLlm).input)
     }
 
     @Test
-    fun `tell me a joke routes to AskHermes`() {
+    fun `tell me a joke routes to LocalLlm`() {
         val route = route("tell me a joke")
-        assertTrue(route is AskHermes)
-        assertEquals("tell me a joke", (route as AskHermes).input)
+        assertTrue(route is LocalLlm)
+        assertEquals("tell me a joke", (route as LocalLlm).input)
     }
 
     @Test
@@ -79,10 +81,10 @@ class CommandRouterTest {
     }
 
     @Test
-    fun `build the app routes to AskHermes`() {
+    fun `build the app routes to LocalLlm`() {
         val route = route("build the app")
-        assertTrue(route is AskHermes)
-        assertEquals("build the app", (route as AskHermes).input)
+        assertTrue(route is LocalLlm)
+        assertEquals("build the app", (route as LocalLlm).input)
     }
 
     @Test
@@ -186,24 +188,25 @@ class CommandRouterTest {
     }
 
     @Test
-    fun `what should I build next routes to AskHermes`() {
+    fun `what should I build next routes to LocalLlm`() {
         val route = route("what should I build next")
-        assertTrue(route is AskHermes)
-        assertEquals("what should I build next", (route as AskHermes).input)
+        assertTrue(route is LocalLlm)
+        assertEquals("what should I build next", (route as LocalLlm).input)
     }
 
     @Test
-    fun `what do you think routes to AskHermes`() {
+    fun `what do you think routes to LocalLlm`() {
         val route = route("what do you think")
-        assertTrue(route is AskHermes)
-        assertEquals("what do you think", (route as AskHermes).input)
+        assertTrue(route is LocalLlm)
+        assertEquals("what do you think", (route as LocalLlm).input)
     }
 
     @Test
-    fun `what time is it routes to AskHermes`() {
+    fun `what time is it routes to AskHermes with static time response`() {
         val route = route("what time is it")
         assertTrue(route is AskHermes)
-        assertEquals("what time is it", (route as AskHermes).input)
+        // SkillMatcher now handles time queries with static response
+        assertEquals("It's {time} on {date}.", (route as AskHermes).input)
     }
 
     @Test
@@ -287,9 +290,10 @@ class CommandRouterTest {
     }
 
     @Test
-    fun `shizuku as a word without colon still routes to AskHermes`() {
+    fun `shizuku as a word without colon routes to LocalLlm`() {
         val route = route("shizuku please")
-        assertTrue(route is AskHermes)
+        assertTrue(route is LocalLlm)
+        assertEquals("shizuku please", (route as LocalLlm).input)
     }
 
     @Test
@@ -349,5 +353,49 @@ class CommandRouterTest {
         assertTrue(route1 is IdentityQuery)
         assertTrue(route2 is IdentityQuery)
         assertTrue(route3 is IdentityQuery)
+    }
+
+    @Test
+    fun `open chrome routes to OpenApp`() {
+        val route = route("open chrome")
+        assertTrue(route is OpenApp)
+        assertEquals("chrome", (route as OpenApp).target)
+    }
+
+    @Test
+    fun `type hi in this text box routes to ScreenControl for TYPE_TEXT`() {
+        val route = route("type hi in this text box")
+        // Debug: print actual route type
+        println("Route type: ${route::class.simpleName}, route: $route")
+        assertTrue(route is ScreenControl, "Got ${route::class.simpleName} instead of ScreenControl")
+        assertEquals("type hi in this text box", (route as ScreenControl).command)
+    }
+
+    @Test
+    fun `call mom routes to CallContact`() {
+        val route = route("call mom")
+        assertTrue(route is CallContact)
+        assertEquals("mom", (route as CallContact).name)
+    }
+
+    @Test
+    fun `who am i routes to IdentityQuery name (duplicate test)`() {
+        val route = route("who am i")
+        assertTrue(route is IdentityQuery)
+        assertEquals("name", (route as IdentityQuery).queryType)
+    }
+
+    @Test
+    fun `unmatched text routes to LocalLlm not AskHermes`() {
+        val route = route("what is the meaning of life")
+        assertTrue(route is LocalLlm)
+        assertEquals("what is the meaning of life", (route as LocalLlm).input)
+    }
+
+    @Test
+    fun `what is 2+2 routes to LocalLlm`() {
+        val route = route("what is 2+2")
+        assertTrue(route is LocalLlm)
+        assertEquals("what is 2+2", (route as LocalLlm).input)
     }
 }

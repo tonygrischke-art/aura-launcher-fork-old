@@ -37,9 +37,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
+import kotlinx.coroutines.withTimeoutOrNull
 import com.aetheria.aura.model.TestModelFileManager
 import com.aetheria.aura.net.HermesClient
 import com.aetheria.aura.actions.ActionExecutor
+import com.aetheria.aura.actions.ActionGuard
 import com.aetheria.aura.router.AppIndex
 import com.aetheria.aura.router.CommandRouter
 import com.aetheria.aura.router.AuraActionRoute
@@ -318,11 +320,25 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     is AuraActionRoute.CallContact -> {
+                        // Confirm before making a call
+                        val confirmed = ActionGuard.confirmCall(context, route.name)
+                        if (!confirmed) {
+                            val c = currentConversation ?: return@launch
+                            lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, "Call to ${route.name} cancelled") }
+                            return@launch
+                        }
                         val action = AuraAction.CallContact(route.name)
                         val result = ActionExecutor.execute(action, context, pkgMgr, appIdx)
                         Log.d("AuraRouter", "Routed CALL_CONTACT name='${route.name}' action=$result matchTimeMs=${System.currentTimeMillis() - startMs}")
                     }
                     is AuraActionRoute.SendText -> {
+                        // Confirm before sending a text
+                        val confirmed = ActionGuard.confirmSendText(context, route.name, route.body)
+                        if (!confirmed) {
+                            val c = currentConversation ?: return@launch
+                            lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, "Text to ${route.name} cancelled") }
+                            return@launch
+                        }
                         val action = AuraAction.SendText(route.name, route.body)
                         val result = ActionExecutor.execute(action, context, pkgMgr, appIdx)
                         Log.d("AuraRouter", "Routed SEND_TEXT name='${route.name}' body='${route.body}' action=$result matchTimeMs=${System.currentTimeMillis() - startMs}")
@@ -336,6 +352,92 @@ class MainActivity : ComponentActivity() {
                         val action = AuraAction.NavigateWeb(route.url)
                         val result = ActionExecutor.execute(action, context, pkgMgr, appIdx)
                         Log.d("AuraRouter", "Routed NAVIGATE_WEB url='${route.url}' action=$result matchTimeMs=${System.currentTimeMillis() - startMs}")
+                    }
+                    is AuraActionRoute.LocalLlm -> {
+                        Log.d("AuraRouter", "Routed LOCAL_LLM input='${route.input}' matchTimeMs=${System.currentTimeMillis() - startMs}")
+
+                        // Check model source preference
+                        val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+                        val modelSource = ModelSource.valueOf(
+                            prefs.getString("model_source", ModelSource.ONLINE.name) ?: ModelSource.ONLINE.name
+                        )
+
+                        // OFFLINE or BOTH: run the on-device model first; BOTH falls back to NIM on failure.
+                        if (modelSource == ModelSource.OFFLINE || modelSource == ModelSource.BOTH) {
+                            val c = currentConversation ?: return@launch
+                            val localMsg = lifecycleScope.async(Dispatchers.IO) { chatRepository.addPendingAssistantMessage(c.id) }.await()
+                            val localId = localMsg.id
+                            if (localId < 0) return@launch
+                            val history = chatRepository.buildHistoryForLlm(c.id)
+                            val sb = StringBuilder()
+                            val localStart = System.currentTimeMillis()
+                            val localErr = com.aetheria.aura.llm.LocalLlm.chat(activity.applicationContext, history, 512) { piece ->
+                                sb.append(piece)
+                                val text = sb.toString()
+                                runOnUiThread { lifecycleScope.launch(Dispatchers.IO) { chatRepository.updateAssistantMessage(localId, text) } }
+                            }
+                            Log.d("AuraRouter", "local inference done err=$localErr chars=${sb.length} ms=${System.currentTimeMillis() - localStart}")
+                            if (localErr == null) {
+                                lifecycleScope.launch(Dispatchers.IO) { chatRepository.completeAssistantMessage(localId, sb.toString()) }
+                                return@launch
+                            }
+                            lifecycleScope.launch(Dispatchers.IO) { chatRepository.failAssistantMessage(localId, "Local model failed: $localErr") }
+                            if (modelSource == ModelSource.OFFLINE) {
+                                lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, "Local model failed: $localErr") }
+                                return@launch
+                            }
+                            lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, "Local model unavailable ($localErr); using NIM...") }
+                        }
+
+                        // Use NIM (online) for now
+                        val startTime = System.currentTimeMillis()
+                        var firstToken = false
+                        var tokenCount = 0
+                        val c = currentConversation ?: return@launch
+                        val msg = lifecycleScope.async(Dispatchers.IO) { chatRepository.addPendingAssistantMessage(c.id) }.await()
+                        val messageId = msg.id
+                        if (messageId < 0) return@launch
+
+                        // Convert local messages to NimClient messages
+                        val nimMessages = chatRepository.getNimMessages(c.id)
+
+                        // Determine tier: VISION for image-related, THINKING for complex, INSTANT for quick
+                        val tier = when {
+                            route.input.contains("image") || route.input.contains("photo") || route.input.contains("picture") || route.input.contains("camera") || route.input.contains("screenshot") -> com.aetheria.aura.nim.NimClient.Tier.VISION
+                            route.input.length > 200 -> com.aetheria.aura.nim.NimClient.Tier.THINKING
+                            else -> com.aetheria.aura.nim.NimClient.Tier.INSTANT
+                        }
+
+                        nimClient.streamChat(
+                            messages = nimMessages,
+                            tier = tier,
+                            onToken = { token ->
+                                if (!firstToken) {
+                                    val ttfb = System.currentTimeMillis() - startTime
+                                    Log.d("AuraRouter", "TTFB: ${ttfb}ms")
+                                    firstToken = true
+                                }
+                                tokenCount++
+                                // Update the streaming message
+                                runOnUiThread { lifecycleScope.launch(Dispatchers.IO) { chatRepository.updateAssistantMessage(messageId, "") } }
+                            },
+                            onComplete = { success ->
+                                val totalTime = System.currentTimeMillis() - startTime
+                                runOnUiThread {
+                                    // Message content is already updated via onToken
+                                }
+                                Log.d("AuraRouter", "NimClient stream complete: success=$success tokens=$tokenCount totalTime=${totalTime}ms tier=$tier")
+                                if (!success) {
+                                    runOnUiThread { lifecycleScope.launch(Dispatchers.IO) { chatRepository.failAssistantMessage(messageId, "NIM unreachable (stream failed)") } }
+                                } else {
+                                    runOnUiThread { lifecycleScope.launch(Dispatchers.IO) { chatRepository.completeAssistantMessage(messageId, "") } } // Content already updated
+                                }
+                            },
+                            onError = { error ->
+                                Log.e("AuraRouter", "NimClient error: $error")
+                                runOnUiThread { lifecycleScope.launch(Dispatchers.IO) { chatRepository.failAssistantMessage(messageId, "NIM unreachable ($error)") } }
+                            }
+                        )
                     }
                     is AuraActionRoute.AskHermes -> {
                         Log.d("AuraRouter", "Routed ASK_HERMES input='${route.input}' matchTimeMs=${System.currentTimeMillis() - startMs}")
@@ -424,8 +526,17 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     is AuraActionRoute.ShizukuShell -> {
-                        // Raw shell command via the Shizuku user service (uid 2000 shell).
-                        val shizukuResult = ShellExecutor.exec(route.command)
+                        // Confirm before executing shell command (with dangerous pattern check)
+                        val confirmed = ActionGuard.confirmShell(context, route.command)
+                        if (!confirmed) {
+                            val c = currentConversation ?: return@launch
+                            lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, "Shell command cancelled") }
+                            return@launch
+                        }
+                        // Raw shell command via the Shizuku user service (uid 2000 shell) with 30s timeout.
+                        val shizukuResult = withTimeoutOrNull(30_000) {
+                            ShellExecutor.exec(route.command)
+                        } ?: ShellExecutor.Result("", "TIMEOUT: Shell command exceeded 30 seconds", -1)
                         Log.d("AuraRouter", "Routed SHIZUKU_SHELL cmd='${route.command}' exit=${shizukuResult.exitCode}")
                         val c = currentConversation ?: return@launch
                         lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, buildString {

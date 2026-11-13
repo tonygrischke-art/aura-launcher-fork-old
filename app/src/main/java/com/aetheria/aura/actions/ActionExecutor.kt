@@ -11,6 +11,8 @@ import android.util.Log
 import com.aetheria.aura.actions.AuraAction.OpenApp
 import com.aetheria.aura.net.HermesClient
 import com.aetheria.aura.router.AppIndex
+import com.aetheria.aura.shizuku.ScreenAgent
+import com.aetheria.aura.shizuku.ShizukuManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -23,8 +25,10 @@ import kotlinx.coroutines.withContext
  */
 object ActionExecutor {
 
-    /** Executes the given AuraAction using the PackageManager and AppIndex to find and launch matching apps. */
-    fun execute(action: AuraAction, context: Context, pm: PackageManager, appIndex: AppIndex? = null): String {
+    /**
+ * Executes the given AuraAction using the PackageManager and AppIndex to find and launch matching apps.
+ */
+    suspend fun execute(action: AuraAction, context: Context, pm: PackageManager, appIndex: AppIndex? = null): String {
         Log.d("AuraRouter", "ActionExecutor.execute action=${action::class.simpleName} $action")
         return when (action) {
             is AuraAction.OpenApp -> executeOpenApp(action, context, pm, appIndex)
@@ -32,6 +36,9 @@ object ActionExecutor {
             is AuraAction.SendText -> executeSendText(action, context, pm)
             is AuraAction.WebSearch -> executeWebSearch(action, context, pm)
             is AuraAction.NavigateWeb -> executeNavigateWeb(action, context, pm)
+            is AuraAction.TakeScreenshot -> executeTakeScreenshot(action, context)
+            is AuraAction.TypeText -> executeTypeText(action, context)
+            is AuraAction.Tap -> executeTap(action, context)
             is AuraAction.AskHermes -> "hermes"
             AuraAction.Unknown -> "error"
         }
@@ -202,5 +209,53 @@ object ActionExecutor {
      */
     fun cleanPhoneNumberForSms(rawNumber: String): String {
         return rawNumber.replace(Regex("[\\s\\-()]"), "")
+    }
+
+    private suspend fun executeTakeScreenshot(action: AuraAction.TakeScreenshot, context: Context): String {
+        if (ShizukuManager.state.value != ShizukuManager.State.READY) {
+            Log.w("AuraRouter", "TakeScreenshot: Shizuku not ready: ${ShizukuManager.state.value}")
+            return "error: Shizuku not ready"
+        }
+        // Use ScreenAgent to take screenshot
+        val result = ScreenAgent.runTask(context, "screenshot") { step ->
+            Log.d("ScreenAgent", "screenshot step: $step")
+        }
+        Log.d("AuraRouter", "TakeScreenshot: $result")
+        if (result.contains("error") || result.contains("Error")) {
+            return "error: $result"
+        }
+        return "confirm"
+    }
+
+    private suspend fun executeTypeText(action: AuraAction.TypeText, context: Context): String {
+        if (ShizukuManager.state.value != ShizukuManager.State.READY) {
+            Log.w("AuraRouter", "TypeText: Shizuku not ready: ${ShizukuManager.state.value}")
+            return "error: Shizuku not ready"
+        }
+        // Use ScreenAgent to type text
+        val result = ScreenAgent.runTask(context, "type ${action.text}") { step ->
+            Log.d("ScreenAgent", "type step: $step")
+        }
+        Log.d("AuraRouter", "TypeText: $result")
+        if (result.contains("error") || result.contains("Error")) {
+            return "error: $result"
+        }
+        return "confirm"
+    }
+
+    private suspend fun executeTap(action: AuraAction.Tap, context: Context): String {
+        if (ShizukuManager.state.value != ShizukuManager.State.READY) {
+            Log.w("AuraRouter", "Tap: Shizuku not ready: ${ShizukuManager.state.value}")
+            return "error: Shizuku not ready"
+        }
+        // Use ScreenAgent to tap at coordinates
+        val result = ScreenAgent.runTask(context, "tap ${action.x} ${action.y}") { step ->
+            Log.d("ScreenAgent", "tap step: $step")
+        }
+        Log.d("AuraRouter", "Tap: $result")
+        if (result.contains("error") || result.contains("Error")) {
+            return "error: $result"
+        }
+        return "confirm"
     }
 }
