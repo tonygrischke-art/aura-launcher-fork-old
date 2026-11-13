@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.imePadding
 import com.aetheria.aura.avatar.AuraColors
 import com.aetheria.aura.net.HermesClient
 import com.aetheria.aura.settings.UserProfileStore
@@ -73,6 +74,7 @@ fun SettingsScreen(
             .background(Color.Black)
             .statusBarsPadding()
             .navigationBarsPadding()
+            .imePadding()
             .verticalScroll(scrollState),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {

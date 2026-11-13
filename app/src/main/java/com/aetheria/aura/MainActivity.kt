@@ -1,6 +1,8 @@
 package com.aetheria.aura
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.role.RoleManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -9,6 +11,7 @@ import android.content.pm.PackageManager
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.provider.Settings as SystemSettings
+import android.provider.Settings as PlatformSettings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -18,6 +21,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.aetheria.aura.avatar.AuraMood
 import com.aetheria.aura.avatar.AuraHomeScreen
 import com.aetheria.aura.nim.NimChatMessage
@@ -737,107 +741,155 @@ fun PermissionOnboardingScreen(
 ) {
     val context = LocalContext.current
     val pm = context.packageManager
+    val lifecycleOwner = LocalLifecycleOwner.current
     
-    val permissions = remember {
+    // All dangerous permissions from manifest (normal permissions like INTERNET, ACCESS_NETWORK_STATE are auto-granted)
+    val dangerousPermissions = remember {
+        mutableListOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.WRITE_CONTACTS,
+            Manifest.permission.READ_SMS,
+            Manifest.permission.SEND_SMS,
+            Manifest.permission.RECEIVE_SMS,
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.READ_CALL_LOG,
+            Manifest.permission.WRITE_CALL_LOG,
+            Manifest.permission.ANSWER_PHONE_CALLS,
+            Manifest.permission.CAMERA,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+            Manifest.permission.READ_MEDIA_IMAGES,
+            Manifest.permission.READ_MEDIA_VIDEO,
+            Manifest.permission.READ_MEDIA_AUDIO,
+        ).filter { perm ->
+            // Filter out permissions not applicable to current SDK
+            when (perm) {
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.READ_MEDIA_AUDIO -> android.os.Build.VERSION.SDK_INT >= 33
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE -> android.os.Build.VERSION.SDK_INT <= 32
+                Manifest.permission.POST_NOTIFICATIONS -> android.os.Build.VERSION.SDK_INT >= 33
+                else -> true
+            }
+        }.toMutableList().also { permList ->
+            // Add POST_NOTIFICATIONS for SDK 33+
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                permList.add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+    
+    // Special access permissions (each needs its own settings screen)
+    val specialPermissions = remember {
         listOf(
-            PermissionItem(
-                permission = Manifest.permission.RECORD_AUDIO,
-                title = "Microphone",
-                description = "Required for voice commands and wake word detection"
-            ),
-            PermissionItem(
-                permission = Manifest.permission.READ_CONTACTS,
-                title = "Contacts",
-                description = "Needed to send texts and make calls by name"
-            ),
-            PermissionItem(
-                permission = Manifest.permission.READ_SMS,
-                title = "SMS",
-                description = "Read and send text messages"
-            ),
-            PermissionItem(
-                permission = Manifest.permission.SEND_SMS,
-                title = "Send SMS",
-                description = "Send text messages from Aura"
-            ),
-            PermissionItem(
-                permission = Manifest.permission.CALL_PHONE,
-                title = "Phone Calls",
-                description = "Make phone calls by voice command"
-            ),
-            PermissionItem(
-                permission = Manifest.permission.CAMERA,
-                title = "Camera",
-                description = "Future: vision features and QR codes"
-            ),
-            PermissionItem(
-                permission = Manifest.permission.ACCESS_FINE_LOCATION,
-                title = "Location",
-                description = "Location-based queries and services"
-            ),
-            PermissionItem(
-                permission = Manifest.permission.READ_MEDIA_IMAGES,
-                title = "Media & Photos",
-                description = "Access photos for vision features"
-            ),
-            PermissionItem(
-                permission = Manifest.permission.SYSTEM_ALERT_WINDOW,
+            SpecialPermissionItem(
                 title = "Display Over Other Apps",
                 description = "Show Aura overlay and floating UI",
-                isSpecial = true,
-                settingsAction = SystemSettings.ACTION_MANAGE_OVERLAY_PERMISSION
+                checkGranted = { PlatformSettings.canDrawOverlays(context) },
+                requestAction = {
+                    val intent = Intent(PlatformSettings.ACTION_MANAGE_OVERLAY_PERMISSION, 
+                        android.net.Uri.parse("package:${context.packageName}"))
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                }
             ),
-            PermissionItem(
-                permission = Manifest.permission.BIND_ACCESSIBILITY_SERVICE,
+            SpecialPermissionItem(
                 title = "Accessibility Service",
                 description = "Screen reading and UI automation for screen-act loop",
-                isSpecial = true,
-                settingsAction = SystemSettings.ACTION_ACCESSIBILITY_SETTINGS
+                checkGranted = { checkAccessibilityEnabled(context) },
+                requestAction = {
+                    val intent = Intent(PlatformSettings.ACTION_ACCESSIBILITY_SETTINGS)
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                }
             ),
-            PermissionItem(
-                permission = Manifest.permission.POST_NOTIFICATIONS,
-                title = "Notifications",
-                description = "Show Aura responses and alerts",
-                isSpecial = true,
-                settingsAction = SystemSettings.ACTION_APP_NOTIFICATION_SETTINGS
+            SpecialPermissionItem(
+                title = "Battery Optimization",
+                description = "Allow Aura to run in background for wake word and automations",
+                checkGranted = { isIgnoringBatteryOptimizations(context) },
+                requestAction = {
+                    val intent = Intent(PlatformSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:${context.packageName}"))
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                }
+            ),
+            SpecialPermissionItem(
+                title = "Default Home App",
+                description = "Set Aura as your home screen for voice-first access",
+                checkGranted = { isDefaultHomeApp(context) },
+                requestAction = {
+                    val roleManager = context.getSystemService(android.app.role.RoleManager::class.java)
+                    val intent = roleManager.createRequestRoleIntent(android.app.role.RoleManager.ROLE_HOME)
+                    context.startActivity(intent)
+                }
+            ),
+            SpecialPermissionItem(
+                title = "Default Assistant",
+                description = "Activate Aura with long-press power or voice",
+                checkGranted = { isDefaultAssistant(context) },
+                requestAction = {
+                    val roleManager = context.getSystemService(android.app.role.RoleManager::class.java)
+                    val intent = roleManager.createRequestRoleIntent(android.app.role.RoleManager.ROLE_ASSISTANT)
+                    context.startActivity(intent)
+                }
+            ),
+            SpecialPermissionItem(
+                title = "Shizuku (Shell Access)",
+                description = "Required for screen control and system-level actions",
+                checkGranted = { com.aetheria.aura.shizuku.ShizukuManager.state.value == com.aetheria.aura.shizuku.ShizukuManager.State.READY },
+                requestAction = {
+                    com.aetheria.aura.shizuku.ShizukuManager.requestPermission()
+                }
             )
         )
     }
     
-    // Track permission states
-    val ctx = LocalContext.current
-    val permissionStates = remember {
+    // Track dangerous permission states
+    val dangerousPermStates = remember {
         mutableStateMapOf<String, Boolean>().also { map ->
-            permissions.forEach { map[it.permission] = ContextCompat.checkSelfPermission(ctx, it.permission) == PackageManager.PERMISSION_GRANTED }
+            dangerousPermissions.forEach { map[it] = ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
         }
     }
     
-    val allGranted = remember { 
-        mutableStateOf(permissionStates.values.all { it }) 
+    // Track special permission states
+    val specialPermStates = remember {
+        mutableStateMapOf<String, Boolean>().also { map ->
+            specialPermissions.forEach { map[it.title] = it.checkGranted() }
+        }
     }
     
-    // Request permission handler
-    fun requestPermission(perm: PermissionItem) {
-        if (perm.isSpecial) {
-            // Special permissions need settings intent
-            val settingsIntent = Intent(perm.settingsAction).apply {
-                if (perm.settingsAction == SystemSettings.ACTION_APP_NOTIFICATION_SETTINGS) {
-                    putExtra(SystemSettings.EXTRA_APP_PACKAGE, context.packageName)
-                } else if (perm.settingsAction == SystemSettings.ACTION_MANAGE_OVERLAY_PERMISSION) {
-                    data = android.net.Uri.parse("package:${context.packageName}")
-                }
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    val allDangerousGranted = remember { mutableStateOf(dangerousPermStates.values.all { it }) }
+    val allSpecialGranted = remember { mutableStateOf(specialPermStates.values.all { it }) }
+    val allGranted = remember { mutableStateOf(allDangerousGranted.value && allSpecialGranted.value) }
+    
+    // Request all dangerous permissions at once
+    fun requestAllDangerousPermissions() {
+        val toRequest = dangerousPermissions.filter { dangerousPermStates[it] != true }.toTypedArray()
+        if (toRequest.isNotEmpty()) {
+            requestMultiplePermissionsLauncher.launch(toRequest)
+        }
+    }
+    
+    // Update states when permissions change
+    androidx.compose.runtime.LaunchedEffect(dangerousPermStates, specialPermStates) {
+        allDangerousGranted.value = dangerousPermStates.values.all { it }
+        allSpecialGranted.value = specialPermStates.values.all { it }
+        allGranted.value = allDangerousGranted.value && allSpecialGranted.value
+    }
+    
+    // Re-check special permissions on resume
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    androidx.compose.runtime.LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+            specialPermissions.forEach { perm ->
+                specialPermStates[perm.title] = perm.checkGranted()
             }
-            context.startActivity(settingsIntent)
-        } else {
-            // Regular permission - use launcher
-            requestPermissionLauncher.launch(perm.permission)
         }
-    }
-    
-    // Update allGranted when permissionStates change
-    androidx.compose.runtime.LaunchedEffect(permissionStates) {
-        allGranted.value = permissionStates.values.all { it }
     }
     
     Box(
@@ -881,10 +933,10 @@ fun PermissionOnboardingScreen(
                 )
                 
                 // Progress indicator
-                val grantedCount = permissionStates.values.count { it }
-                val totalCount = permissions.size
+                val totalCount = dangerousPermissions.size + specialPermissions.size
+                val grantedCount = dangerousPermStates.values.count { it } + specialPermStates.values.count { it }
                 
-                LinearProgressIndicator(
+                androidx.compose.material3.LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth(),
                     progress = grantedCount.toFloat() / totalCount.toFloat()
                 )
@@ -896,20 +948,50 @@ fun PermissionOnboardingScreen(
                     textAlign = TextAlign.Center
                 )
                 
-                // Permission list
+                // Dangerous permissions section
+                Text(
+                    text = "App Permissions",
+                    style = Typography().titleMedium,
+                    color = Color(0xFF00E5FF),
+                    textAlign = TextAlign.Start
+                )
+                
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(300.dp)
+                        .height(250.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
-                    permissions.forEach { perm ->
-                        val granted = permissionStates[perm.permission] ?: false
-                        
+                    dangerousPermissions.forEach { perm ->
+                        val granted = dangerousPermStates[perm] ?: false
                         PermissionRow(
-                            permission = perm,
+                            title = getPermissionTitle(perm),
+                            subtitle = getPermissionDescription(perm),
                             granted = granted,
-                            onRequest = { requestPermission(perm) }
+                            onRequest = { requestAllDangerousPermissions() }
+                        )
+                    }
+                }
+                
+                // Special permissions section
+                Text(
+                    text = "Special Access",
+                    style = Typography().titleMedium,
+                    color = Color(0xFF00E5FF),
+                    textAlign = TextAlign.Start
+                )
+                
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(250.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    specialPermissions.forEach { perm ->
+                        val granted = specialPermStates[perm.title] ?: false
+                        SpecialPermissionRow(
+                            permission = perm,
+                            granted = granted
                         )
                     }
                 }
@@ -927,9 +1009,7 @@ fun PermissionOnboardingScreen(
                     }
                     
                     Button(
-                        onClick = {
-                            if (allGranted.value) onComplete()
-                        },
+                        onClick = { if (allGranted.value) onComplete() },
                         modifier = Modifier.weight(1f),
                         enabled = allGranted.value,
                         colors = ButtonDefaults.buttonColors(
@@ -945,9 +1025,144 @@ fun PermissionOnboardingScreen(
     }
 }
 
+data class SpecialPermissionItem(
+    val title: String,
+    val description: String,
+    val checkGranted: () -> Boolean,
+    val requestAction: () -> Unit
+)
+
+@Composable
+fun SpecialPermissionRow(
+    permission: SpecialPermissionItem,
+    granted: Boolean,
+    onRequest: () -> Unit = {}
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+            .background(
+                if (granted) Color(0xFF00E5FF).copy(alpha = 0.1f) else Color.Transparent,
+                shape = Shapes().small
+            )
+            .padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = if (granted) Icons.Filled.CheckCircle else Icons.Filled.Settings,
+            contentDescription = if (granted) "Granted" else "Not granted",
+            tint = if (granted) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.5f),
+            modifier = Modifier.size(24.dp)
+        )
+        
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = permission.title, style = Typography().bodyMedium, color = Color.White)
+            Text(text = permission.description, style = Typography().bodySmall, color = Color.White.copy(alpha = 0.6f))
+        }
+        
+        if (!granted) {
+            Button(
+                onClick = permission.requestAction,
+                modifier = Modifier.padding(start = 8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.White.copy(alpha = 0.1f),
+                    contentColor = Color.White
+                )
+            ) {
+                Text("Open Settings")
+            }
+        } else {
+            Text(text = "✓ Granted", style = Typography().bodySmall, color = Color(0xFF00E5FF))
+        }
+    }
+}
+
+private fun getPermissionTitle(permission: String): String = when (permission) {
+    Manifest.permission.RECORD_AUDIO -> "Microphone"
+    Manifest.permission.READ_CONTACTS -> "Contacts (Read)"
+    Manifest.permission.WRITE_CONTACTS -> "Contacts (Write)"
+    Manifest.permission.READ_SMS -> "SMS (Read)"
+    Manifest.permission.SEND_SMS -> "SMS (Send)"
+    Manifest.permission.RECEIVE_SMS -> "SMS (Receive)"
+    Manifest.permission.CALL_PHONE -> "Phone Calls"
+    Manifest.permission.READ_PHONE_STATE -> "Phone State"
+    Manifest.permission.READ_CALL_LOG -> "Call Log (Read)"
+    Manifest.permission.WRITE_CALL_LOG -> "Call Log (Write)"
+    Manifest.permission.ANSWER_PHONE_CALLS -> "Answer Calls"
+    Manifest.permission.CAMERA -> "Camera"
+    Manifest.permission.ACCESS_FINE_LOCATION -> "Location (Fine)"
+    Manifest.permission.ACCESS_COARSE_LOCATION -> "Location (Coarse)"
+    Manifest.permission.ACCESS_BACKGROUND_LOCATION -> "Location (Background)"
+    Manifest.permission.READ_MEDIA_IMAGES -> "Media (Images)"
+    Manifest.permission.READ_MEDIA_VIDEO -> "Media (Video)"
+    Manifest.permission.READ_MEDIA_AUDIO -> "Media (Audio)"
+    Manifest.permission.POST_NOTIFICATIONS -> "Notifications"
+    else -> permission
+}
+
+private fun getPermissionDescription(permission: String): String = when (permission) {
+    Manifest.permission.RECORD_AUDIO -> "Required for voice commands and wake word detection"
+    Manifest.permission.READ_CONTACTS -> "Needed to send texts and make calls by name"
+    Manifest.permission.WRITE_CONTACTS -> "Create or update contacts from voice"
+    Manifest.permission.READ_SMS -> "Read SMS for context and automation"
+    Manifest.permission.SEND_SMS -> "Send text messages from Aura"
+    Manifest.permission.RECEIVE_SMS -> "Receive SMS for automation triggers"
+    Manifest.permission.CALL_PHONE -> "Make phone calls by voice command"
+    Manifest.permission.READ_PHONE_STATE -> "Detect call state for automation"
+    Manifest.permission.READ_CALL_LOG -> "Read call history for context"
+    Manifest.permission.WRITE_CALL_LOG -> "Log calls made by Aura"
+    Manifest.permission.ANSWER_PHONE_CALLS -> "Auto-answer calls for automation"
+    Manifest.permission.CAMERA -> "Future: vision features and QR codes"
+    Manifest.permission.ACCESS_FINE_LOCATION -> "Location-based queries and services"
+    Manifest.permission.ACCESS_COARSE_LOCATION -> "Approximate location for services"
+    Manifest.permission.ACCESS_BACKGROUND_LOCATION -> "Location access when app is backgrounded"
+    Manifest.permission.READ_MEDIA_IMAGES -> "Access photos for vision features"
+    Manifest.permission.READ_MEDIA_VIDEO -> "Access videos for vision features"
+    Manifest.permission.READ_MEDIA_AUDIO -> "Access audio for voice features"
+    Manifest.permission.POST_NOTIFICATIONS -> "Show Aura responses and alerts"
+    else -> "Required for Aura functionality"
+}
+
+private fun checkAccessibilityEnabled(context: Context): Boolean {
+    val accessibilityManager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
+    return try {
+        val enabledServices = accessibilityManager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_GENERIC)
+        enabledServices.any { it.id.contains("AuraAccessibilityService") }
+    } catch (e: Exception) {
+        false
+    }
+}
+
+private fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+    val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+    return try {
+        powerManager.isIgnoringBatteryOptimizations(context.packageName)
+    } catch (e: Exception) {
+        false
+    }
+}
+
+private fun isDefaultHomeApp(context: Context): Boolean {
+    val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+    val resolveInfo = context.packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+    return resolveInfo?.activityInfo?.packageName == context.packageName
+}
+
+private fun isDefaultAssistant(context: Context): Boolean {
+    val roleManager = context.getSystemService(android.app.role.RoleManager::class.java)
+    return try {
+        roleManager.isRoleHeld(android.app.role.RoleManager.ROLE_ASSISTANT)
+    } catch (e: Exception) {
+        false
+    }
+}
+
 @Composable
 fun PermissionRow(
-    permission: PermissionItem,
+    title: String,
+    subtitle: String,
     granted: Boolean,
     onRequest: () -> Unit
 ) {
@@ -963,53 +1178,31 @@ fun PermissionRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Status icon
         Icon(
-            imageVector = if (granted) 
-                Icons.Filled.CheckCircle 
-            else if (permission.isSpecial) 
-                Icons.Filled.Settings 
-            else 
-                Icons.Filled.HelpOutline,
+            imageVector = if (granted) Icons.Filled.CheckCircle else Icons.Filled.HelpOutline,
             contentDescription = if (granted) "Granted" else "Not granted",
             tint = if (granted) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.5f),
             modifier = Modifier.size(24.dp)
         )
         
-        // Info
-        Column(
-            modifier = Modifier.weight(1f)
-        ) {
-            Text(
-                text = permission.title,
-                style = Typography().bodyMedium,
-                color = Color.White
-            )
-            Text(
-                text = permission.description,
-                style = Typography().bodySmall,
-                color = Color.White.copy(alpha = 0.6f)
-            )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, style = Typography().bodyMedium, color = Color.White)
+            Text(text = subtitle, style = Typography().bodySmall, color = Color.White.copy(alpha = 0.6f))
         }
         
-        // Action button
         if (!granted) {
             Button(
                 onClick = onRequest,
                 modifier = Modifier.padding(start = 8.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (permission.isSpecial) Color.White.copy(alpha = 0.1f) else Color(0xFF00E5FF),
-                    contentColor = if (permission.isSpecial) Color.White else Color.Black
+                    containerColor = Color(0xFF00E5FF),
+                    contentColor = Color.Black
                 )
             ) {
-                Text(if (permission.isSpecial) "Open Settings" else "Grant")
+                Text("Grant")
             }
         } else {
-            Text(
-                text = "✓ Granted",
-                style = Typography().bodySmall,
-                color = Color(0xFF00E5FF)
-            )
+            Text(text = "✓ Granted", style = Typography().bodySmall, color = Color(0xFF00E5FF))
         }
     }
 }

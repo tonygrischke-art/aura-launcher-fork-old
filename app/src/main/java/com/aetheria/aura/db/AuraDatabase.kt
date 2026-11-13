@@ -1,6 +1,7 @@
 package com.aetheria.aura.db
 
 import android.content.Context
+import android.util.Log
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -30,13 +31,25 @@ abstract class AuraDatabase : RoomDatabase() {
 
         fun getInstance(context: Context): AuraDatabase {
             return INSTANCE ?: synchronized(this) {
+                Log.d("AuraDatabase", "Creating database instance")
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AuraDatabase::class.java,
                     "aura_database"
                 )
                     .addMigrations(MIGRATION_1_2)
+                    .addCallback(object : RoomDatabase.Callback() {
+                        override fun onCreate(db: SupportSQLiteDatabase) {
+                            super.onCreate(db)
+                            Log.d("AuraDatabase", "Database created")
+                        }
+                        override fun onOpen(db: SupportSQLiteDatabase) {
+                            super.onOpen(db)
+                            Log.d("AuraDatabase", "Database opened")
+                        }
+                    })
                     .build()
+                Log.d("AuraDatabase", "Database instance created successfully")
                 INSTANCE = instance
                 instance
             }
