@@ -25,8 +25,8 @@ import com.aetheria.aura.nim.NimClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.collectAsStateWithLifecycle
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -36,7 +36,7 @@ import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.await
+import kotlinx.coroutines.async
 import com.aetheria.aura.model.TestModelFileManager
 import com.aetheria.aura.net.HermesClient
 import com.aetheria.aura.actions.ActionExecutor
@@ -44,6 +44,7 @@ import com.aetheria.aura.router.AppIndex
 import com.aetheria.aura.router.CommandRouter
 import com.aetheria.aura.router.AuraActionRoute
 import com.aetheria.aura.settings.SettingsScreen
+import com.aetheria.aura.settings.UserProfileStore
 import com.aetheria.aura.wakeWord.WakeWordService
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.rememberCoroutineScope
@@ -348,7 +349,7 @@ class MainActivity : ComponentActivity() {
                         // OFFLINE or BOTH: run the on-device model first; BOTH falls back to NIM on failure.
                         if (modelSource == ModelSource.OFFLINE || modelSource == ModelSource.BOTH) {
                             val c = currentConversation ?: return@launch
-                            val localMsg = lifecycleScope.launch(Dispatchers.IO) { chatRepository.addPendingAssistantMessage(c.id) }.await()
+                            val localMsg = lifecycleScope.async(Dispatchers.IO) { chatRepository.addPendingAssistantMessage(c.id) }.await()
                             val localId = localMsg.id
                             if (localId < 0) return@launch
                             val history = chatRepository.buildHistoryForLlm(c.id)
@@ -377,7 +378,7 @@ class MainActivity : ComponentActivity() {
                         var firstToken = false
                         var tokenCount = 0
                         val c = currentConversation ?: return@launch
-                        val msg = lifecycleScope.launch(Dispatchers.IO) { chatRepository.addPendingAssistantMessage(c.id) }.await()
+                        val msg = lifecycleScope.async(Dispatchers.IO) { chatRepository.addPendingAssistantMessage(c.id) }.await()
                         val messageId = msg.id
                         if (messageId < 0) return@launch
 
@@ -448,6 +449,19 @@ class MainActivity : ComponentActivity() {
                             }
                             val c = currentConversation ?: return@launch
                             lifecycleScope.launch(Dispatchers.IO) { chatRepository.addSystemMessage(c.id, result) }
+                        }
+                    }
+                    is AuraActionRoute.IdentityQuery -> {
+                        val c = currentConversation ?: return@launch
+                        val name = UserProfileStore.getUserName(context)
+                        val reply = when (route.queryType) {
+                            "name" -> if (name.isNotBlank()) "You're $name." else "I don't know your name yet. You can set it in Settings."
+                            "location" -> "I can't see your location."
+                            else -> "Unknown query."
+                        }
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            chatRepository.addUserMessage(c.id, trimmed)
+                            chatRepository.addSystemMessage(c.id, reply)
                         }
                     }
                 }

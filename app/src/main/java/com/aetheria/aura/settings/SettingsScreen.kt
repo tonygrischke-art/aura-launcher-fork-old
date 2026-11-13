@@ -3,7 +3,7 @@ package com.aetheria.aura.settings
 import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.Settings
-import android.view.accessibility.AccessibilityServiceInfo
+import android.accessibilityservice.AccessibilityServiceInfo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -113,8 +113,7 @@ fun SettingsScreen(
             },
             modifier = Modifier
                 .fillMaxWidth(0.85f)
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color(0xFF14181F))
+                .background(Color(0xFF14181F), RoundedCornerShape(12.dp))
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             textStyle = TextStyle(color = Color.White, fontSize = 16.sp),
             cursorBrush = SolidColor(AuraColors.Cyan),
@@ -148,8 +147,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth(0.85f)
                     .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .background(Color(0xFF4D1A1A))
-                    .clip(RoundedCornerShape(8.dp)),
+                    .background(Color(0xFF4D1A1A), RoundedCornerShape(8.dp)),
                 contentAlignment = Alignment.CenterStart
             ) {
                 Text(
@@ -211,8 +209,7 @@ fun SettingsScreen(
             },
             modifier = Modifier
                 .fillMaxWidth(0.85f)
-                .clip(RoundedCornerShape(12.dp))
-                .background(Color(0xFF14181F))
+                .background(Color(0xFF14181F), RoundedCornerShape(12.dp))
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             textStyle = TextStyle(color = Color.White, fontSize = 16.sp),
             cursorBrush = SolidColor(AuraColors.Cyan),
@@ -387,7 +384,7 @@ fun SettingsScreen(
 private fun checkAccessibilityEnabled(context: Context): Boolean {
     val accessibilityManager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
     return try {
-        val enabledServices = accessibilityManager.getEnabledAccessibilityServiceList(android.view.accessibility.AccessibilityServiceInfo.FEEDBACK_GENERIC)
+        val enabledServices = accessibilityManager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_GENERIC)
         enabledServices.any { it.id.contains("AuraAccessibilityService") }
     } catch (e: Exception) {
         false
